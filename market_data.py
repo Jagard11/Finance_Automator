@@ -7,7 +7,9 @@ import time
 import pandas as pd
 import requests
 import yfinance as yf
+import os
 
+from prefetch import cache_dir as get_cache_dir
 
 T = TypeVar("T")
 
@@ -32,16 +34,43 @@ def fetch_nasdaq_symbols() -> List[str]:
     return symbols
 
 
-def fetch_price_history(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
-    def _call() -> pd.DataFrame:
+def fetch_price_history(symbol: str, start_date: str, end_date: str, avoid_network: bool = False) -> pd.DataFrame:
+    # Prefer cached CSV from prefetch when available, then fall back to yfinance
+    def _read_cache() -> Optional[pd.DataFrame]:
+        path = os.path.join(get_cache_dir(), f"{symbol.upper()}_prices.csv")
+        if not os.path.exists(path):
+            return None
+        try:
+            # Parse the first column as date index explicitly to avoid per-row dateutil fallback
+            df = pd.read_csv(path, index_col=0)
+            # Ensure index is datetime
+            df.index = pd.to_datetime(df.index, format="%Y-%m-%d", errors="coerce")
+            df = df[~df.index.isna()]
+            if df is None or df.empty:
+                return None
+            # Filter to requested window; cache uses index as date
+            start = pd.to_datetime(start_date)
+            end = pd.to_datetime(end_date)
+            df = df[(df.index >= start) & (df.index <= end)]
+            return df
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _call_api() -> pd.DataFrame:
         ticker = yf.Ticker(symbol)
-        # Use Ticker.history to pass timeout; yfinance supports timeout kw
         data = ticker.history(start=start_date, end=end_date, auto_adjust=True, timeout=20)
         if not isinstance(data, pd.DataFrame) or data.empty:
             return pd.DataFrame()
         return data
 
-    result = _with_retries(_call)
+    cached = _read_cache()
+    if cached is not None and not cached.empty:
+        return cached
+
+    if avoid_network:
+        return pd.DataFrame()
+
+    result = _with_retries(_call_api)
     if result is None:
         return pd.DataFrame()
     return result

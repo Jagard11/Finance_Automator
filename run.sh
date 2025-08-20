@@ -20,4 +20,13 @@ fi
 . "$VENV_DIR/bin/activate"
 
 python -m pip install -r "$SCRIPT_DIR/requirements.txt"
-exec python "$SCRIPT_DIR/app.py"
+
+# Forward only `--*` flags to the app
+forward_args=()
+for arg in "$@"; do
+	case "$arg" in
+		--*) forward_args+=("$arg") ;;
+	esac
+done
+
+exec python "$SCRIPT_DIR/app.py" "${forward_args[@]}"

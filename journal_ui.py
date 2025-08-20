@@ -1,49 +1,16 @@
 import tkinter as tk
 from tkinter import ttk
 from tkinter import font as tkfont
-from datetime import date, timedelta, datetime
+from datetime import datetime
 from typing import Dict, List, Optional
 
+import os
+import time
 import pandas as pd
 
 import storage
-from models import Portfolio, Holding
-from values_cache import read_values_cache
-
-
-def _normalize_date(s: str) -> str:
-    s = (s or "").strip()
-    for fmt in ("%Y-%m-%d", "%Y%m%d"):
-        try:
-            return datetime.strptime(s, fmt).date().isoformat()
-        except ValueError:
-            continue
-    return s
-
-
-def _holding_start(holding: Holding) -> Optional[str]:
-    dates = [_normalize_date(e.date) for e in holding.events if e.date]
-    if not dates:
-        return None
-    return min(dates)
-
-
-def _build_values_dataframe_from_cache(portfolio: Portfolio) -> pd.DataFrame:
-    symbols: List[str] = [h.symbol for h in portfolio.holdings]
-    frames: List[pd.DataFrame] = []
-    for sym in symbols:
-        df = read_values_cache(sym)
-        if df is None or df.empty:
-            continue
-        df = df.copy()
-        df["date"] = pd.to_datetime(df["date"]).dt.date
-        df.set_index("date", inplace=True)
-        df.rename(columns={"value": sym}, inplace=True)
-        frames.append(df[[sym]])
-    if not frames:
-        return pd.DataFrame()
-    out = pd.concat(frames, axis=1).sort_index()
-    return out
+from models import Portfolio
+from journal_builder import journal_csv_path, rebuild_journal_in_background
 
 
 def build_journal_ui(parent: tk.Widget) -> None:
@@ -73,67 +40,106 @@ def build_journal_ui(parent: tk.Widget) -> None:
 
     canvas_window = canvas.create_window((0, 0), window=grid_frame, anchor="nw")
 
+    journal_path = journal_csv_path()
+    last_mtime = os.path.getmtime(journal_path) if os.path.exists(journal_path) else 0.0
+    last_refresh = 0.0
+
     def on_configure(_evt=None):  # noqa: ANN001
         canvas.configure(scrollregion=canvas.bbox("all"))
 
     grid_frame.bind("<Configure>", on_configure)
 
+    def read_journal() -> pd.DataFrame:
+        if not os.path.exists(journal_path):
+            return pd.DataFrame()
+        try:
+            df = pd.read_csv(journal_path)
+            if df.empty or df.shape[1] <= 1:
+                return pd.DataFrame()
+            df["date"] = pd.to_datetime(df["date"]).dt.date
+            df.set_index("date", inplace=True)
+            return df
+        except Exception:
+            return pd.DataFrame()
+
     def refresh_grid() -> None:
-        nonlocal portfolio, highlight_font
-        # Clear existing children
+        nonlocal highlight_font, last_refresh
+        now = time.time()
+        if now - last_refresh < 1.0:
+            return
+        last_refresh = now
+        # Preserve scroll
+        x = canvas.xview()
+        y = canvas.yview()
+        # Clear
         for w in grid_frame.winfo_children():
             w.destroy()
-        values = _build_values_dataframe_from_cache(portfolio)
-        if values is None or values.empty:
-            ttk.Label(grid_frame, text="No cached values yet").grid(row=0, column=0, padx=8, pady=8)
+        df = read_journal()
+        if df is None or df.empty:
+            ttk.Label(grid_frame, text="Journal not built yet...").grid(row=0, column=0, padx=8, pady=8)
             on_configure()
+            # Kick off build if missing
+            rebuild_journal_in_background()
             return
-        symbols = list(values.columns)
-        # Header row
+        symbols = list(df.columns)
+        # Header
         ttk.Label(grid_frame, text="Date").grid(row=0, column=0, padx=6, pady=4, sticky="w")
         for j, sym in enumerate(symbols, start=1):
             ttk.Label(grid_frame, text=sym).grid(row=0, column=j, padx=6, pady=4, sticky="w")
-        # Determine per-column maxima row index
+        # Max per symbol
         max_idx: Dict[str, int] = {}
         for sym in symbols:
-            col = values[sym]
+            col = pd.to_numeric(df[sym], errors="coerce")
             try:
                 max_val = col.max(skipna=True)
                 if pd.isna(max_val):
                     continue
-                # First occurrence index
                 row_pos = int(col.index.get_indexer_for([col.idxmax()])[0])
                 max_idx[sym] = row_pos
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
         # Body
-        for i, ts in enumerate(values.index, start=1):
-            date_str = pd.Timestamp(ts).isoformat()
-            ttk.Label(grid_frame, text=date_str).grid(row=i, column=0, padx=6, pady=2, sticky="w")
+        for i, d in enumerate(df.index, start=1):
+            ttk.Label(grid_frame, text=d.isoformat()).grid(row=i, column=0, padx=6, pady=2, sticky="w")
             for j, sym in enumerate(symbols, start=1):
-                val = values.at[ts, sym]
-                txt = "" if pd.isna(val) else f"{val:.2f}"
+                s = df.at[d, sym]
+                s = "" if pd.isna(s) else str(s)
                 if sym in max_idx and max_idx[sym] == (i - 1):
-                    tk.Label(grid_frame, text=txt, font=highlight_font).grid(row=i, column=j, padx=6, pady=2, sticky="w")
+                    tk.Label(grid_frame, text=s, font=highlight_font).grid(row=i, column=j, padx=6, pady=2, sticky="w")
                 else:
-                    ttk.Label(grid_frame, text=txt).grid(row=i, column=j, padx=6, pady=2, sticky="w")
+                    ttk.Label(grid_frame, text=s).grid(row=i, column=j, padx=6, pady=2, sticky="w")
         on_configure()
+        # Restore scroll
+        canvas.xview_moveto(x[0])
+        canvas.yview_moveto(y[0])
+
+    def poll_for_updates() -> None:
+        nonlocal last_mtime
+        try:
+            m = os.path.getmtime(journal_path) if os.path.exists(journal_path) else 0.0
+        except Exception:
+            m = last_mtime
+        if m > last_mtime:
+            last_mtime = m
+            refresh_grid()
+        # Poll occasionally; actual UI drawing is throttled inside refresh_grid
+        parent.after(1000, poll_for_updates)
 
     def reload_and_refresh() -> None:
-        nonlocal portfolio, highlight_font
-        portfolio = storage.load_portfolio()
         # Update highlight font if default changed (e.g., zoom)
         try:
-            df = tkfont.nametofont("TkDefaultFont")
-            highlight_font.configure(family=df.cget("family"), size=df.cget("size"))
+            dfnt = tkfont.nametofont("TkDefaultFont")
+            highlight_font.configure(family=dfnt.cget("family"), size=dfnt.cget("size"))
         except Exception:
             pass
         refresh_grid()
 
     parent.bind("<<FontScaleChanged>>", lambda _e: reload_and_refresh())
 
-    # Do not auto-load at startup to avoid blocking UI; load on tab open
+    # Initial content and polling
     ttk.Label(grid_frame, text="Open the Journal tab to load cached values").grid(row=0, column=0, padx=8, pady=8)
+    parent.after(1000, refresh_grid)
+    parent.after(1000, poll_for_updates)
 
     # Expose refresh hook for tab change
     setattr(parent, "_journal_refresh", reload_and_refresh)

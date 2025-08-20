@@ -1,12 +1,16 @@
 import tkinter as tk
 from tkinter import ttk
+import time
+import sys
+from contextlib import contextmanager
+from time import perf_counter
 
 from portfolio_ui import build_portfolio_ui
 from charts_ui import build_charts_ui, register_charts_tab_handlers
 from summary_ui import build_summary_ui, register_summary_tab_handlers
 from journal_ui import build_journal_ui, register_journal_tab_handlers
 from theme import apply_dark_theme
-from startup_tasks import run_startup_tasks_in_background
+from startup_tasks import run_startup_tasks_in_background, get_progress_queue
 
 
 def main() -> None:
@@ -67,6 +71,115 @@ def main() -> None:
     register_summary_tab_handlers(notebook, summary_frame)
     register_charts_tab_handlers(notebook, charts_frame)
     register_journal_tab_handlers(notebook, journal_frame)
+
+    # Lightweight IPC polling with rate limiting (<= 10 fps)
+    last_ui_refresh = 0.0
+
+    # Optional debug-stall profiler
+    DEBUGSTALL = any(arg == "--debugstall" for arg in sys.argv)
+
+    class FrameProfiler:
+        def __init__(self, enabled: bool) -> None:
+            self.enabled = enabled
+            self.current_frame_totals = {}
+            self.batch_totals = {}
+            self.batch_counts = {}
+            self.frames_in_batch = 0
+
+        def start_frame(self) -> None:
+            if not self.enabled:
+                return
+            self.current_frame_totals = {}
+
+        @contextmanager
+        def section(self, label: str):
+            if not self.enabled:
+                yield
+                return
+            t0 = perf_counter()
+            try:
+                yield
+            finally:
+                dt = (perf_counter() - t0)
+                self.current_frame_totals[label] = self.current_frame_totals.get(label, 0.0) + dt
+
+        def end_frame(self) -> None:
+            if not self.enabled:
+                return
+            for k, v in self.current_frame_totals.items():
+                self.batch_totals[k] = self.batch_totals.get(k, 0.0) + v
+                self.batch_counts[k] = self.batch_counts.get(k, 0) + 1
+            self.frames_in_batch += 1
+            if self.frames_in_batch >= 30:
+                # Print top time consumers over the last 30 frames
+                totals = sorted(self.batch_totals.items(), key=lambda kv: kv[1], reverse=True)
+                lines = []
+                for k, v in totals[:8]:
+                    avg_ms = (v / max(1, self.batch_counts.get(k, 1))) * 1000.0
+                    lines.append(f"{k}={v*1000.0:.1f}ms (avg {avg_ms:.2f}ms)")
+                if lines:
+                    print("DEBUGSTALL: last 30 frames -> " + "; ".join(lines))
+                # Reset batch
+                self.batch_totals.clear()
+                self.batch_counts.clear()
+                self.frames_in_batch = 0
+
+    profiler = FrameProfiler(DEBUGSTALL)
+
+    def refresh_all_throttled() -> None:
+        nonlocal last_ui_refresh
+        now = time.time()
+        # 0.15s min interval (~6-7 fps)
+        if now - last_ui_refresh < 0.15:
+            return
+        last_ui_refresh = now
+        try:
+            fn = getattr(summary_frame, "_summary_refresh", None)
+            if callable(fn):
+                with profiler.section("refresh_summary"):
+                    fn()
+        except Exception:
+            pass
+        try:
+            fn = getattr(journal_frame, "_journal_refresh", None)
+            if callable(fn):
+                with profiler.section("refresh_journal"):
+                    fn()
+        except Exception:
+            pass
+        try:
+            fn = getattr(charts_frame, "_charts_refresh_and_plot", None)
+            if callable(fn):
+                with profiler.section("refresh_charts"):
+                    fn()
+        except Exception:
+            pass
+
+    def poll_worker_messages() -> None:
+        profiler.start_frame()
+        q = get_progress_queue()
+        if q is not None:
+            with profiler.section("queue_drain"):
+                drained = 0
+                # Read a small batch each tick to avoid UI jank
+                while drained < 50:
+                    try:
+                        with profiler.section("queue_get"):
+                            msg = q.get_nowait()
+                    except Exception:
+                        break
+                    drained += 1
+                    # On any progress affecting portfolio/caches, schedule a refresh
+                    t = str(msg.get("type", ""))
+                    if t.startswith("dividends:") or t.startswith("values:") or t in {"prefetch:done", "startup:complete"}:
+                        with profiler.section("refresh_all"):
+                            refresh_all_throttled()
+        # Poll at ~10 fps
+        root.after(100, poll_worker_messages)
+        profiler.end_frame()
+
+    # Start polling the background worker queue
+    root.after(100, poll_worker_messages)
 
     # Ensure Summary is default selected tab
     notebook.select(summary_frame)

@@ -8,6 +8,7 @@ import os
 from models import Portfolio, Holding, Event, EventType
 import storage
 from values_cache import mark_symbol_dirty
+from startup_tasks import get_task_queue
 
 
 def build_portfolio_ui(parent: tk.Widget) -> None:
@@ -300,6 +301,12 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
                 )
                 target.events.append(ev)
                 mark_symbol_dirty(target.symbol)
+                try:
+                    q = get_task_queue()
+                    if q is not None:
+                        q.put_nowait({"type": "warm_values"})
+                except Exception:
+                    pass
 
                 # Reset draft and refresh
                 new_entry_values = {
@@ -348,6 +355,13 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             target_holding.events.append(ev)
             mark_symbol_dirty(new_symbol)
             mark_symbol_dirty(current_holding.symbol)
+            try:
+                q = get_task_queue()
+                if q is not None:
+                    q.put_nowait({"type": "prefetch_symbol", "symbol": new_symbol})
+                    q.put_nowait({"type": "warm_values"})
+            except Exception:
+                pass
             refresh_holdings_list()
             return
 
@@ -367,6 +381,12 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
         elif col == "note":
             ev.note = value or ""
         refresh_events_list()
+        try:
+            q = get_task_queue()
+            if q is not None:
+                q.put_nowait({"type": "warm_values"})
+        except Exception:
+            pass
 
     def begin_edit(item: str, col_id: str) -> None:
         nonlocal edit_widget, edit_item, edit_col
@@ -508,6 +528,12 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             del holding.events[idx]
             mark_symbol_dirty(sym)
             refresh_events_list()
+            try:
+                q = get_task_queue()
+                if q is not None:
+                    q.put_nowait({"type": "warm_values"})
+            except Exception:
+                pass
 
     def on_holdings_double_click(evt) -> None:  # noqa: ANN001
         nonlocal selected_holding_symbol
@@ -550,6 +576,7 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             refresh_holdings_list()
             if current_symbol:
                 selected_holding_symbol = current_symbol
+        # Poll infrequently; heavy updates arrive via background worker
         parent.after(2000, poll_for_changes)
 
     events_tree.bind("<Double-1>", on_tree_double_click)

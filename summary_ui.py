@@ -125,7 +125,8 @@ def build_summary_ui(parent: tk.Widget) -> None:
         # Fetch last close over recent window
         end = date.today()
         start = end - timedelta(days=14)
-        df = fetch_price_history(symbol, start.isoformat(), (end + timedelta(days=1)).isoformat())
+        # Use cache-only to keep UI snappy; background worker will update cache
+        df = fetch_price_history(symbol, start.isoformat(), (end + timedelta(days=1)).isoformat(), avoid_network=True)
         price = None
         if df is not None and not df.empty:
             series = df["Close"] if "Close" in df.columns else df.iloc[:, 0]

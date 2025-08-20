@@ -177,7 +177,7 @@ def build_charts_ui(parent: tk.Widget) -> None:
             return roi_cache[sym]
         start, end = compute_date_range(holding)
         end_plus = (date.fromisoformat(end) + timedelta(days=1)).isoformat()
-        df = fetch_price_history(sym, start, end_plus)
+        df = fetch_price_history(sym, start, end_plus, avoid_network=True)
         if df is None or df.empty:
             roi_cache[sym] = None  # type: ignore[assignment]
             return None
@@ -275,7 +275,8 @@ def build_charts_ui(parent: tk.Widget) -> None:
         start, end = compute_date_range(holding)
         # yfinance end date is exclusive, add one day
         end_plus = (date.fromisoformat(end) + timedelta(days=1)).isoformat()
-        df = fetch_price_history(symbol, start, end_plus)
+        # Avoid network during UI interaction; rely on cache, worker warms it
+        df = fetch_price_history(symbol, start, end_plus, avoid_network=True)
         ax.clear()
         ax.set_facecolor("#1e1e1e")
         ax.set_title(f"{symbol} Price History", color="#ffffff")
