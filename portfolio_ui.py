@@ -599,6 +599,12 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
         portfolio.dividend_reinvest = reinvest_var.get()
         storage.save_portfolio(portfolio)
         messagebox.showinfo("Saved", f"Saved to {storage.default_portfolio_path()}")
+        try:
+            q = get_task_queue()
+            if q is not None:
+                q.put_nowait({"type": "warm_values"})
+        except Exception:
+            pass
 
     ttk.Button(bottom, text="Save Portfolio", command=on_save).pack(side="right")
 

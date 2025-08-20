@@ -39,8 +39,21 @@ def build_journal_csv_streaming(portfolio_path: Optional[str] = None) -> None:
         if df is None or df.empty:
             continue
         df = df.copy()
-        df["date"] = pd.to_datetime(df["date"])  # naive dates
+        # Ensure date column is parsed as date and drop rows with zero/NaN values
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df = df.dropna(subset=["date"])  # drop invalid dates
         df.set_index("date", inplace=True)
+        # Remove rows where shares <= 0 or value <= 0 to avoid blank journal entries
+        if "shares" in df.columns:
+            try:
+                df = df[pd.to_numeric(df["shares"], errors="coerce").fillna(0) > 0]
+            except Exception:
+                pass
+        if "value" in df.columns:
+            try:
+                df = df[pd.to_numeric(df["value"], errors="coerce").fillna(0) > 0]
+            except Exception:
+                pass
         sym_to_df[sym] = df
         date_index = df.index if date_index is None else date_index.union(df.index)
 

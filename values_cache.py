@@ -84,12 +84,15 @@ def compute_and_write_values_for_holding(holding: Holding, start_iso: str, end_i
             ts = pd.Timestamp(ev.date)
         except Exception:
             continue
-        if ts not in changes.index:
+        # Align event to the first index at or after the event date
+        pos = changes.index.searchsorted(ts, side="left")
+        if pos >= len(changes.index):
+            # Event after last known price; skip
             continue
         if ev.type == EventType.PURCHASE:
-            changes.loc[ts] += float(ev.shares or 0.0)
+            changes.iloc[pos] += float(ev.shares or 0.0)
         elif ev.type == EventType.SALE:
-            changes.loc[ts] -= float(ev.shares or 0.0)
+            changes.iloc[pos] -= float(ev.shares or 0.0)
     shares = changes.cumsum()
     values = (shares * series).fillna(0.0)
     out = pd.DataFrame({"date": values.index.date, "shares": shares.values, "value": values.values})

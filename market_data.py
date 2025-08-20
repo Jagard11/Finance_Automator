@@ -41,12 +41,28 @@ def fetch_price_history(symbol: str, start_date: str, end_date: str, avoid_netwo
         if not os.path.exists(path):
             return None
         try:
-            # Parse the first column as date index explicitly to avoid per-row dateutil fallback
-            df = pd.read_csv(path, index_col=0)
-            # Ensure index is datetime
-            df.index = pd.to_datetime(df.index, format="%Y-%m-%d", errors="coerce")
-            df = df[~df.index.isna()]
-            if df is None or df.empty:
+            header_only = pd.read_csv(path, nrows=0)
+            columns = list(header_only.columns)
+            price_col: Optional[str] = None
+            for name in ("Close", "Adj Close", "Adj_Close"):
+                if name in columns:
+                    price_col = name
+                    break
+            if price_col is not None:
+                usecols = [0, price_col]
+            else:
+                usecols = [0]
+                if len(columns) > 1:
+                    usecols.append(columns[1])
+            df = pd.read_csv(path, index_col=0, usecols=usecols, memory_map=True)
+            # Ensure index is datetime (accept date or datetime)
+            idx = pd.to_datetime(df.index, errors="coerce")
+            mask = ~idx.isna()
+            if not mask.any():
+                return None
+            df = df.loc[mask]
+            df.index = idx[mask]
+            if df.empty:
                 return None
             # Filter to requested window; cache uses index as date
             start = pd.to_datetime(start_date)

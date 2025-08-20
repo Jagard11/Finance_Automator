@@ -3,16 +3,21 @@ from tkinter import ttk, messagebox
 from datetime import date, timedelta, datetime
 from typing import Optional, List, Tuple, Dict
 
-import matplotlib
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from matplotlib.figure import Figure
+def _lazy_import_matplotlib():
+    import matplotlib
+    matplotlib.use("TkAgg")
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg  # type: ignore[F401]
+    from matplotlib.figure import Figure  # type: ignore[F401]
+    return matplotlib, FigureCanvasTkAgg, Figure
 
 from models import Portfolio, Holding
 import storage
 from market_data import fetch_price_history
+from values_cache import read_values_cache
+import pandas as pd
 
 
-matplotlib.use("TkAgg")
+matplotlib, FigureCanvasTkAgg, Figure = _lazy_import_matplotlib()
 
 
 def build_charts_ui(parent: tk.Widget) -> None:
@@ -249,11 +254,7 @@ def build_charts_ui(parent: tk.Widget) -> None:
         ax.grid(True, color="#333333", linestyle="--", linewidth=0.5)
         for spine in ax.spines.values():
             spine.set_color("#666666")
-        try:
-            fig.tight_layout()
-        except Exception:
-            pass
-        canvas.draw()
+        canvas.draw_idle()
 
     def find_holding(symbol: str) -> Optional[Holding]:
         for h in portfolio.holdings:
@@ -282,21 +283,38 @@ def build_charts_ui(parent: tk.Widget) -> None:
         ax.set_title(f"{symbol} Price History", color="#ffffff")
         ax.set_xlabel("Date", color="#ffffff")
         ax.set_ylabel("Adj Close", color="#ffffff")
-        if df is not None and not df.empty:
-            series = df["Close"] if "Close" in df.columns else df.iloc[:, 0]
+        if df is None or df.empty:
+            # Fallback to values cache: derive price = value / shares when shares > 0
+            vdf = read_values_cache(symbol)
+            if vdf is not None and not vdf.empty:
+                try:
+                    vdf = vdf[(vdf["date"] >= start) & (vdf["date"] <= date.fromisoformat(end))]
+                    vdf = vdf.copy()
+                    vdf["date"] = vdf["date"].dt.tz_localize(None) if hasattr(vdf["date"], "dt") else vdf["date"]
+                    vdf.set_index("date", inplace=True)
+                    shares = pd.to_numeric(vdf.get("shares"), errors="coerce")
+                    values = pd.to_numeric(vdf.get("value"), errors="coerce")
+                    price = values.divide(shares.where(shares > 0))
+                    price = price.dropna()
+                    if not price.empty:
+                        ax.plot(price.index, price.values, label=f"{symbol} (derived)", color="#0a84ff")
+                        ax.legend(facecolor="#1e1e1e", edgecolor="#333333", labelcolor="#ffffff")
+                    else:
+                        ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center", color="#cccccc")
+                except Exception:
+                    ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center", color="#cccccc")
+            else:
+                ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center", color="#cccccc")
+        else:
+            # Handle either Close, Adj Close, or first column
+            series = df["Close"] if "Close" in df.columns else (df["Adj Close"] if "Adj Close" in df.columns else df.iloc[:, 0])
             ax.plot(series.index, series.values, label=symbol, color="#0a84ff")
             ax.legend(facecolor="#1e1e1e", edgecolor="#333333", labelcolor="#ffffff")
-        else:
-            ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center", color="#cccccc")
         ax.grid(True, color="#333333", linestyle="--", linewidth=0.5)
         for spine in ax.spines.values():
             spine.set_color("#666666")
         update_axes_fonts(ax, font_scale)
-        try:
-            fig.tight_layout()
-        except Exception:
-            pass
-        canvas.draw()
+        canvas.draw_idle()
 
     symbols_list.bind("<<ListboxSelect>>", lambda _e: plot_selected())
     sort_combo.bind("<<ComboboxSelected>>", lambda _e: refresh_symbols())

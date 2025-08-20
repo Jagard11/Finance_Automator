@@ -3,6 +3,7 @@ from tkinter import ttk
 from datetime import date, timedelta, datetime
 from typing import Dict, List, Optional, Tuple
 
+import os
 from models import Portfolio, Holding, EventType
 import storage
 from market_data import fetch_price_history
@@ -49,6 +50,11 @@ def _date_range(holding: Holding) -> Tuple[str, str]:
 
 def build_summary_ui(parent: tk.Widget) -> None:
     portfolio: Portfolio = storage.load_portfolio()
+    portfolio_path = storage.default_portfolio_path()
+    try:
+        last_mtime = os.path.getmtime(portfolio_path) if os.path.exists(portfolio_path) else 0.0
+    except Exception:
+        last_mtime = 0.0
 
     # Price cache per symbol
     last_price_cache: Dict[str, Optional[float]] = {}
@@ -215,9 +221,16 @@ def build_summary_ui(parent: tk.Widget) -> None:
         tree.heading(col, text=tree.heading(col, option="text"), command=lambda c=col: on_sort(c))
 
     def reload_and_refresh() -> None:
-        nonlocal portfolio, last_price_cache
-        portfolio = storage.load_portfolio()
-        last_price_cache = {}
+        nonlocal portfolio, last_price_cache, last_mtime
+        # Only reload from disk if file changed to avoid thrashing caches
+        try:
+            m = os.path.getmtime(portfolio_path) if os.path.exists(portfolio_path) else 0.0
+        except Exception:
+            m = last_mtime
+        if m > last_mtime:
+            last_mtime = m
+            portfolio = storage.load_portfolio()
+        # Preserve last_price_cache across refreshes so we don't re-read CSVs unnecessarily
         recompute_and_fill()
 
     # Initial load

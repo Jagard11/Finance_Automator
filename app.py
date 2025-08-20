@@ -70,6 +70,16 @@ def main() -> None:
 
     register_summary_tab_handlers(notebook, summary_frame)
     register_charts_tab_handlers(notebook, charts_frame)
+    # Inject a helper so the journal tab can set a suffix while building
+    def set_journal_tab_suffix(suffix: str) -> None:
+        try:
+            idx = notebook.index(journal_frame)
+            base = "Journal"
+            notebook.tab(idx, text=base + suffix)
+        except Exception:
+            pass
+    setattr(journal_frame, "_journal_set_tab_suffix", set_journal_tab_suffix)
+
     register_journal_tab_handlers(notebook, journal_frame)
 
     # Lightweight IPC polling with rate limiting (<= 10 fps)
@@ -140,20 +150,8 @@ def main() -> None:
                     fn()
         except Exception:
             pass
-        try:
-            fn = getattr(journal_frame, "_journal_refresh", None)
-            if callable(fn):
-                with profiler.section("refresh_journal"):
-                    fn()
-        except Exception:
-            pass
-        try:
-            fn = getattr(charts_frame, "_charts_refresh_and_plot", None)
-            if callable(fn):
-                with profiler.section("refresh_charts"):
-                    fn()
-        except Exception:
-            pass
+        # Journal and Charts are self-refreshing on tab changes or file mtimes;
+        # avoid triggering heavy redraws here to keep UI responsive
 
     def poll_worker_messages() -> None:
         profiler.start_frame()

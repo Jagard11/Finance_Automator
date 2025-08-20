@@ -6,7 +6,8 @@ from typing import Optional, Dict, Any
 
 from prefetch import collect_all_symbols, fetch_and_cache_symbol
 from dividends import cache_and_ingest_dividends_for_file
-from values_cache import warm_values_cache_for_portfolio
+from values_cache import warm_values_cache_for_portfolio, mark_symbol_dirty
+from journal_builder import build_journal_csv_streaming
 import storage
 
 
@@ -37,6 +38,13 @@ def _run_all(progress_q: Optional[mp.Queue] = None, task_q: Optional[mp.Queue] =
     except Exception as exc:  # noqa: BLE001
         send({"type": "prefetch:fatal", "error": str(exc)})
 
+    # Mark all symbols dirty to recompute values with latest algorithm
+    try:
+        for sym in symbols:
+            mark_symbol_dirty(sym)
+    except Exception:
+        pass
+
     # After prefetch, ingest dividends for each portfolio file with cache-awareness
     for path in storage.list_portfolio_paths():
         try:
@@ -53,9 +61,18 @@ def _run_all(progress_q: Optional[mp.Queue] = None, task_q: Optional[mp.Queue] =
         except Exception as exc:  # noqa: BLE001
             send({"type": "values:error", "path": path, "error": str(exc)})
 
+    # Rebuild journals now that values are up to date
+    for path in storage.list_portfolio_paths():
+        try:
+            build_journal_csv_streaming(path)
+            send({"type": "journal:rebuilt", "path": path})
+        except Exception as exc:  # noqa: BLE001
+            send({"type": "journal:error", "path": path, "error": str(exc)})
+
     send({"type": "startup:complete"})
 
-    # Task loop: handle on-demand jobs from UI
+    # Task loop: handle on-demand jobs from UI, with periodic maintenance
+    last_maint = time.time()
     while True:
         try:
             task = None
@@ -66,6 +83,20 @@ def _run_all(progress_q: Optional[mp.Queue] = None, task_q: Optional[mp.Queue] =
                 time.sleep(0.5)
         except Exception:
             task = None
+
+        # Periodic maintenance: warm values and rebuild journals every few minutes while running
+        now = time.time()
+        if now - last_maint > 180:
+            for path in storage.list_portfolio_paths():
+                try:
+                    updated = warm_values_cache_for_portfolio(path)
+                    if updated:
+                        send({"type": "values:warmed", "path": path, "updated": int(updated)})
+                        build_journal_csv_streaming(path)
+                        send({"type": "journal:rebuilt", "path": path})
+                except Exception as exc:  # noqa: BLE001
+                    send({"type": "maintenance:error", "path": path, "error": str(exc)})
+            last_maint = now
 
         if task is None:
             continue
@@ -102,6 +133,7 @@ def _run_all(progress_q: Optional[mp.Queue] = None, task_q: Optional[mp.Queue] =
 _progress_queue: Optional[mp.Queue] = None
 _task_queue: Optional[mp.Queue] = None
 _proc: Optional[mp.Process] = None
+_ctx: Optional[mp.context.BaseContext] = None
 
 
 def get_progress_queue() -> Optional[mp.Queue]:
@@ -109,12 +141,14 @@ def get_progress_queue() -> Optional[mp.Queue]:
 
 
 def run_startup_tasks_in_background() -> None:
-    global _progress_queue, _task_queue, _proc
+    global _progress_queue, _task_queue, _proc, _ctx
     if _proc is not None and _proc.is_alive():
         return
-    _progress_queue = mp.Queue()
-    _task_queue = mp.Queue()
-    _proc = mp.Process(target=_run_all, args=(_progress_queue, _task_queue), name="startup-tasks", daemon=True)
+    # Use spawn to avoid copying the UI process via fork
+    _ctx = mp.get_context("spawn")
+    _progress_queue = _ctx.Queue()
+    _task_queue = _ctx.Queue()
+    _proc = _ctx.Process(target=_run_all, args=(_progress_queue, _task_queue), name="startup-tasks", daemon=True)
     _proc.start()
 
 
