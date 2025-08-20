@@ -5,6 +5,7 @@ from typing import Optional
 import pandas as pd
 from datetime import datetime
 import os
+import webbrowser
 
 from models import Portfolio, Holding, Event, EventType
 import storage
@@ -99,6 +100,165 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     # Events section
     right_frame = ttk.Frame(main_pane)
     main_pane.add(right_frame, weight=3)
+
+    # Header area above events: company name, price, change, status, and link
+    header = ttk.Frame(right_frame)
+    header.pack(fill="x", pady=(0, 8))
+
+    company_var = tk.StringVar(value="")
+    company_label = ttk.Label(header, textvariable=company_var)
+    company_label.pack(anchor="w")
+
+    price_row = ttk.Frame(header)
+    price_row.pack(anchor="w")
+
+    price_var = tk.StringVar(value="")
+    change_var = tk.StringVar(value="")
+    # Fonts for price and change (large and half-size-ish)
+    try:
+        from tkinter import font as tkfont  # local import to avoid top-level dependency
+        heading_font = tkfont.nametofont("TkHeadingFont")
+        price_font = heading_font.copy()
+        price_font.configure(size=max(10, int(heading_font.cget("size") * 2)))
+        change_font = heading_font.copy()
+        change_font.configure(size=max(8, int(heading_font.cget("size"))))
+    except Exception:
+        price_font = None
+        change_font = None
+
+    price_label = ttk.Label(price_row, textvariable=price_var)
+    if price_font is not None:
+        price_label.configure(font=price_font)
+    price_label.pack(side="left")
+
+    change_label = ttk.Label(price_row, textvariable=change_var)
+    if change_font is not None:
+        change_label.configure(font=change_font)
+    change_label.pack(side="left", padx=(8, 0))
+
+    status_var = tk.StringVar(value="")
+    status_label = ttk.Label(header, textvariable=status_var)
+    status_label.pack(anchor="w")
+
+    link_label = ttk.Label(header, text="View on Yahoo Finance", foreground="#0a84ff", cursor="hand2")
+    link_label.pack(anchor="w")
+
+    def _open_symbol_link(sym: str) -> None:
+        try:
+            if sym:
+                webbrowser.open_new_tab(f"https://finance.yahoo.com/quote/{sym}")
+        except Exception:
+            pass
+
+    link_label.bind("<Button-1>", lambda _e: _open_symbol_link(selected_holding_symbol or ""))
+
+    def _is_after_close_eastern() -> bool:
+        # Show "At close" after 4:00 PM ET and on weekends
+        try:
+            from zoneinfo import ZoneInfo  # Python 3.9+
+            now = datetime.now(ZoneInfo("America/New_York"))
+        except Exception:
+            now = datetime.now()
+        if now.weekday() >= 5:  # Saturday/Sunday
+            return True
+        return (now.hour, now.minute) >= (16, 0)
+
+    _company_name_cache = {}
+
+    def _get_company_name(sym: str) -> str:
+        s = (sym or "").upper()
+        if not s:
+            return ""
+        if s in _company_name_cache:
+            return _company_name_cache[s]
+        name = ""
+        try:
+            import yfinance as yf
+            info = getattr(yf.Ticker(s), "info", None)
+            if isinstance(info, dict):
+                name = (info.get("longName") or info.get("shortName") or "").strip()
+        except Exception:
+            name = ""
+        if not name:
+            name = s
+        _company_name_cache[s] = name
+        return name
+
+    def update_header_for_symbol(sym: Optional[str], last: Optional[float] = None, prev: Optional[float] = None) -> None:
+        s = (sym or "").upper()
+        if not s:
+            company_var.set("")
+            price_var.set("")
+            change_var.set("")
+            status_var.set("")
+            return
+        company_name = _get_company_name(s)
+        company_var.set(f"{company_name} ({s})")
+        # If prices not provided, read from cache helpers
+        if last is None or prev is None:
+            lp, pp = _get_last_and_prev_price(s)
+            if last is None:
+                last = lp
+            if prev is None:
+                prev = pp
+        if last is None:
+            price_var.set("")
+            change_var.set("")
+        else:
+            try:
+                price_var.set(f"{last:,.2f}")
+            except Exception:
+                price_var.set(str(last))
+            if prev is not None and prev != 0:
+                try:
+                    diff = last - prev
+                    pct = (last / prev - 1.0) * 100.0
+                except Exception:
+                    diff = 0.0
+                    pct = 0.0
+                sign = "+" if diff > 0 else ""
+                try:
+                    change_var.set(f"{sign}{diff:,.2f} ({pct:+.2f}%)")
+                except Exception:
+                    change_var.set(f"{sign}{diff} ({pct:+.2f}%)")
+                # Colorize by sign
+                if diff < 0:
+                    try:
+                        change_label.configure(foreground="#ef5350")  # red
+                    except Exception:
+                        pass
+                elif diff > 0:
+                    try:
+                        change_label.configure(foreground="#4caf50")  # green
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        change_label.configure(foreground="")
+                    except Exception:
+                        pass
+            else:
+                change_var.set("")
+        status_var.set("At close" if _is_after_close_eastern() else "")
+
+    # Recalculate fonts on global scale change
+    def _recalc_header_fonts() -> None:
+        try:
+            from tkinter import font as tkfont
+            heading_font2 = tkfont.nametofont("TkHeadingFont")
+            pf = heading_font2.copy()
+            pf.configure(size=max(10, int(heading_font2.cget("size") * 2)))
+            cf = heading_font2.copy()
+            cf.configure(size=max(8, int(heading_font2.cget("size"))))
+            price_label.configure(font=pf)
+            change_label.configure(font=cf)
+        except Exception:
+            pass
+
+    try:
+        parent.bind("<<FontScaleChanged>>", lambda _e: _recalc_header_fonts())
+    except Exception:
+        pass
 
     ttk.Label(right_frame, text="Events").pack(anchor="w")
 
@@ -676,6 +836,8 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
         if holding is not None:
             enumerated = list(enumerate(holding.events))
             last_price, prev_price = _get_last_and_prev_price(holding.symbol)
+            # Update header with latest price info for the selected holding
+            update_header_for_symbol(holding.symbol, last_price, prev_price)
             enumerated.sort(key=lambda pair: build_sort_tuple(pair[1], holding.symbol, pair[0]), reverse=events_sort_reverse)
             for original_idx, e in enumerated:
                 iid = f"{holding.symbol}:{original_idx}"
@@ -734,6 +896,8 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
                     day_gain_pct_txt,
                     e.note,
                 ))
+        else:
+            update_header_for_symbol(None)
 
         # Always include a new event row for quick entry with placeholders or draft values
         events_tree.insert("", "end", iid="new", values=(
