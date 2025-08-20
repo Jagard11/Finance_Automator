@@ -8,7 +8,7 @@ from typing import Iterable, Optional, Dict, Set
 import pandas as pd
 
 import storage
-from market_data import fetch_dividends, fetch_price_history
+from market_data import fetch_dividends, fetch_price_history, fetch_dividend_payment_dates
 from models import Portfolio, Holding, Event, EventType
 from prefetch import cache_dir as get_cache_dir
 
@@ -144,11 +144,34 @@ def ingest_dividends_for_holding_range(portfolio: Portfolio, holding: Holding, s
     series = fetch_dividends(symbol, start_date_iso, end_date_iso)
     if series is None or series.empty:
         return 0
+    # Try to map ex-dates to payment dates when possible
+    paydf = fetch_dividend_payment_dates(symbol, start_date_iso, end_date_iso)
+    pay_map: Dict[str, Optional[str]] = {}
+    try:
+        if isinstance(paydf, pd.DataFrame) and not paydf.empty:
+            for _, row in paydf.iterrows():
+                try:
+                    ex_iso = pd.Timestamp(row.get("ex_date")).date().isoformat()
+                except Exception:
+                    continue
+                pay_dt = row.get("payment_date")
+                pay_iso: Optional[str] = None
+                try:
+                    if pd.notna(pay_dt):
+                        pay_iso = pd.Timestamp(pay_dt).date().isoformat()
+                except Exception:
+                    pay_iso = None
+                pay_map[ex_iso] = pay_iso
+    except Exception:
+        pay_map = {}
+
     for ex_dt, per_share in series.items():
         try:
             ex_iso = pd.Timestamp(ex_dt).date().isoformat()
         except Exception:  # noqa: BLE001
             continue
+        # Use payment date if known; else fall back to ex-date for cash/drip processing
+        eff_date_iso = pay_map.get(ex_iso) or ex_iso
         shares_owned = compute_owned_shares_on_date(holding, ex_iso)
         if shares_owned <= 0.0:
             continue
@@ -156,9 +179,9 @@ def ingest_dividends_for_holding_range(portfolio: Portfolio, holding: Holding, s
         if cash_amount == 0.0:
             continue
         # Holding-level dividend event
-        if not _has_symbol_dividend_on_date(holding, symbol, ex_iso):
+        if not _has_symbol_dividend_on_date(holding, symbol, eff_date_iso):
             holding.events.append(Event(
-                date=ex_iso,
+                date=eff_date_iso,
                 type=EventType.DIVIDEND,
                 amount=cash_amount,
                 note=f"{DIV_NOTE_PREFIX}{symbol}",
@@ -166,12 +189,12 @@ def ingest_dividends_for_holding_range(portfolio: Portfolio, holding: Holding, s
             changes += 1
         # Cash vs DRIP
         if reinvest:
-            if not _has_drip_purchase_on_date(holding, symbol, ex_iso):
-                price = _first_available_close_price(symbol, ex_iso)
+            if not _has_drip_purchase_on_date(holding, symbol, eff_date_iso):
+                price = _first_available_close_price(symbol, eff_date_iso)
                 if price and price > 0:
                     shares_to_add = cash_amount / price
                     holding.events.append(Event(
-                        date=ex_iso,
+                        date=eff_date_iso,
                         type=EventType.PURCHASE,
                         shares=shares_to_add,
                         price=price,
@@ -180,9 +203,9 @@ def ingest_dividends_for_holding_range(portfolio: Portfolio, holding: Holding, s
                     ))
                     changes += 1
         else:
-            if not _has_cash_dividend_on_date(portfolio, symbol, ex_iso):
+            if not _has_cash_dividend_on_date(portfolio, symbol, eff_date_iso):
                 portfolio.cash_events.append(Event(
-                    date=ex_iso,
+                    date=eff_date_iso,
                     type=EventType.DIVIDEND,
                     amount=cash_amount,
                     note=f"{DIV_NOTE_PREFIX}{symbol}",

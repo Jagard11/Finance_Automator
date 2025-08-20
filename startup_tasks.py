@@ -126,6 +126,26 @@ def _run_all(progress_q: Optional[mp.Queue] = None, task_q: Optional[mp.Queue] =
             if total_updated:
                 send({"type": "values:done", "updated": total_updated})
             continue
+        if ttype == "ingest_dividends":
+            path = task.get("path")
+            paths = [path] if isinstance(path, str) else list(storage.list_portfolio_paths())
+            total_added = 0
+            for p in paths:
+                try:
+                    added = cache_and_ingest_dividends_for_file(p)
+                    if added:
+                        # Warm values and rebuild journal if new dividends affected DRIP or cash
+                        warm_values_cache_for_portfolio(p)
+                        build_journal_csv_streaming(p)
+                except Exception as exc:  # noqa: BLE001
+                    send({"type": "dividends:error", "path": p, "error": str(exc)})
+                    continue
+                total_added += int(added)
+                send({"type": "dividends:ingested", "path": p, "added": int(added)})
+                send({"type": "journal:rebuilt", "path": p})
+            if total_added:
+                send({"type": "dividends:done", "added": total_added})
+            continue
         if ttype == "prefetch_symbol":
             sym = str(task.get("symbol", "")).strip().upper()
             if sym:

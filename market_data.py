@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional, Callable, TypeVar
+from typing import List, Optional, Callable, TypeVar, Tuple
 import time
 
 import pandas as pd
@@ -130,3 +130,31 @@ def fetch_dividends(symbol: str, start_date: str, end_date: str) -> pd.Series:
     out = div[(div.index >= start) & (div.index <= end)]
     vprint(f"fetch_dividends: rows={len(out)}")
     return out
+
+
+def fetch_dividend_payment_dates(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """Best-effort fetch of dividend payment dates.
+
+    yfinance exposes a dividends Series indexed by ex-dividend date. Payment dates are not
+    directly available reliably; attempt to use corporate actions if available, else return empty.
+    Returns DataFrame with columns: ex_date (datetime64), payment_date (datetime64), amount (float).
+    """
+    try:
+        ticker = yf.Ticker(symbol)
+        # Some versions expose actions with Dividends; often only ex-date. Keep code defensive.
+        actions = getattr(ticker, "actions", None)
+        if isinstance(actions, pd.DataFrame) and not actions.empty and "Dividends" in actions.columns:
+            df = actions.copy()
+            # Add ex_date as index; try payment date if present in index/columns (rare)
+            df = df.reset_index().rename(columns={df.columns[0]: "date", "Dividends": "amount"})
+            df["ex_date"] = pd.to_datetime(df["date"], errors="coerce")
+            df["payment_date"] = pd.NaT  # unknown by default
+            df = df.dropna(subset=["ex_date"])  # require ex-date
+            # Filter window
+            start = pd.to_datetime(start_date)
+            end = pd.to_datetime(end_date)
+            df = df[(df["ex_date"] >= start) & (df["ex_date"] <= end)]
+            return df[["ex_date", "payment_date", "amount"]]
+    except Exception:
+        pass
+    return pd.DataFrame(columns=["ex_date", "payment_date", "amount"]).astype({"ex_date": "datetime64[ns]"})

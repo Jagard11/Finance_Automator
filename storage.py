@@ -4,6 +4,9 @@ from typing import Optional, List
 
 from models import Portfolio, Holding, Event, EventType
 
+# Allow overriding the active portfolio file at runtime (for portfolio swapping)
+_DEFAULT_PORTFOLIO_PATH_OVERRIDE: Optional[str] = None
+
 
 def default_data_dir() -> str:
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -12,7 +15,17 @@ def default_data_dir() -> str:
 
 
 def default_portfolio_path() -> str:
+    # If a runtime override has been set, prefer it
+    global _DEFAULT_PORTFOLIO_PATH_OVERRIDE
+    if _DEFAULT_PORTFOLIO_PATH_OVERRIDE and os.path.isfile(_DEFAULT_PORTFOLIO_PATH_OVERRIDE):
+        return _DEFAULT_PORTFOLIO_PATH_OVERRIDE
     return os.path.join(default_data_dir(), "portfolio_default.csv")
+
+
+def set_default_portfolio_path(path: str) -> None:
+    """Set the active portfolio CSV path used by default by other modules."""
+    global _DEFAULT_PORTFOLIO_PATH_OVERRIDE
+    _DEFAULT_PORTFOLIO_PATH_OVERRIDE = path
 
 
 def list_portfolio_paths() -> List[str]:

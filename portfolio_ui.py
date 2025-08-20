@@ -27,10 +27,53 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
 
     ttk.Label(top_frame, text="Portfolio:").pack(side="left")
     portfolio_name_var = tk.StringVar(value=portfolio.name)
-    ttk.Entry(top_frame, textvariable=portfolio_name_var, width=30).pack(side="left", padx=(4, 16))
+    ttk.Entry(top_frame, textvariable=portfolio_name_var, width=30).pack(side="left", padx=(4, 8))
+
+    # Portfolio switcher
+    ttk.Label(top_frame, text="File:").pack(side="left")
+    portfolio_paths = storage.list_portfolio_paths()
+    active_path = storage.default_portfolio_path()
+    display_names = [os.path.basename(p) for p in portfolio_paths]
+    name_to_path = {os.path.basename(p): p for p in portfolio_paths}
+    portfolio_path_var = tk.StringVar(value=os.path.basename(active_path))
+    path_combo = ttk.Combobox(top_frame, textvariable=portfolio_path_var, state="readonly", width=40, values=display_names)
+    path_combo.pack(side="left", padx=(4, 8))
+
+    def on_switch_portfolio() -> None:
+        name = portfolio_path_var.get().strip()
+        path = name_to_path.get(name, "")
+        if not path:
+            return
+        try:
+            storage.set_default_portfolio_path(path)
+        except Exception:
+            pass
+        # Reload portfolio and refresh UI
+        nonlocal portfolio, portfolio_path, last_mtime
+        portfolio_path = storage.default_portfolio_path()
+        try:
+            last_mtime = os.path.getmtime(portfolio_path) if os.path.exists(portfolio_path) else 0.0
+        except Exception:
+            last_mtime = 0.0
+        portfolio = storage.load_portfolio(portfolio_path)
+        portfolio_name_var.set(portfolio.name)
+        reinvest_var.set(portfolio.dividend_reinvest)
+        refresh_holdings_list()
+
+    ttk.Button(top_frame, text="Switch", command=on_switch_portfolio).pack(side="left", padx=(0, 8))
 
     reinvest_var = tk.BooleanVar(value=portfolio.dividend_reinvest)
     ttk.Checkbutton(top_frame, text="Dividend Reinvest", variable=reinvest_var).pack(side="left")
+
+    # Manual refresh dividends
+    def on_refresh_dividends() -> None:
+        try:
+            q = get_task_queue()
+            if q is not None:
+                q.put_nowait({"type": "ingest_dividends", "path": storage.default_portfolio_path()})
+        except Exception:
+            pass
+    ttk.Button(top_frame, text="Refresh Dividends", command=on_refresh_dividends).pack(side="left", padx=(8, 0))
 
     # Split panes: holdings list and events
     main_pane = ttk.PanedWindow(parent, orient=tk.HORIZONTAL)

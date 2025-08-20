@@ -64,6 +64,16 @@ def build_charts_ui(parent: tk.Widget) -> None:
     symbols_list = tk.Listbox(left, height=12)
     symbols_list.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
+    # Reference data controls
+    ref_row = ttk.Frame(left)
+    ref_row.pack(fill="x", padx=8, pady=(0, 8))
+    ttk.Label(ref_row, text="Reference:").pack(side="left")
+    ref_var = tk.StringVar(value="")
+    ref_entry = ttk.Entry(ref_row, textvariable=ref_var, width=12)
+    ref_entry.pack(side="left", padx=(4, 4))
+    ref_enable_var = tk.BooleanVar(value=False)
+    ttk.Checkbutton(ref_row, text="Show", variable=ref_enable_var, command=lambda: plot_selected()).pack(side="left")
+
     # Figure area with dark style
     def apply_matplotlib_style(scale: float) -> None:
         base = 10 * scale
@@ -105,6 +115,7 @@ def build_charts_ui(parent: tk.Widget) -> None:
 
     fig = Figure(figsize=(8, 5), dpi=100, facecolor="#121212", constrained_layout=True)
     ax = fig.add_subplot(111, facecolor="#1e1e1e")
+    ax2 = ax.twinx()
     ax.set_title("Price History", color="#ffffff")
     ax.set_xlabel("Date", color="#ffffff")
     ax.set_ylabel("Adj Close", color="#ffffff")
@@ -248,13 +259,17 @@ def build_charts_ui(parent: tk.Widget) -> None:
 
     def clear_chart() -> None:
         ax.clear()
+        ax2.clear()
         ax.set_facecolor("#1e1e1e")
         ax.set_title("Price History", color="#ffffff")
         ax.set_xlabel("Date", color="#ffffff")
         ax.set_ylabel("Adj Close", color="#ffffff")
+        ax2.set_ylabel("Ref", color="#ffffff")
         ax.text(0.5, 0.5, "No symbols", transform=ax.transAxes, ha="center", va="center", color="#cccccc")
         ax.grid(True, color="#333333", linestyle="--", linewidth=0.5)
         for spine in ax.spines.values():
+            spine.set_color("#666666")
+        for spine in ax2.spines.values():
             spine.set_color("#666666")
         canvas.draw_idle()
 
@@ -281,10 +296,12 @@ def build_charts_ui(parent: tk.Widget) -> None:
         # Avoid network during UI interaction; rely on cache, worker warms it
         df = fetch_price_history(symbol, start, end_plus, avoid_network=True)
         ax.clear()
+        ax2.clear()
         ax.set_facecolor("#1e1e1e")
         ax.set_title(f"{symbol} Price History", color="#ffffff")
         ax.set_xlabel("Date", color="#ffffff")
         ax.set_ylabel("Adj Close", color="#ffffff")
+        ax2.set_ylabel("Ref", color="#ffffff")
         if df is None or df.empty:
             # Fallback to values cache: derive price = value / shares when shares > 0
             vdf = read_values_cache(symbol)
@@ -320,11 +337,30 @@ def build_charts_ui(parent: tk.Widget) -> None:
             # Handle either Close, Adj Close, or first column
             series = df["Close"] if "Close" in df.columns else (df["Adj Close"] if "Adj Close" in df.columns else df.iloc[:, 0])
             ax.plot(series.index, series.values, label=symbol, color="#0a84ff")
-            ax.legend(facecolor="#1e1e1e", edgecolor="#333333", labelcolor="#ffffff")
+            # Plot reference if enabled
+            if ref_enable_var.get() and ref_var.get().strip():
+                ref_sym = ref_var.get().strip().upper()
+                try:
+                    ref_df = fetch_price_history(ref_sym, start, end_plus, avoid_network=True)
+                except Exception:
+                    ref_df = None
+                if ref_df is not None and not ref_df.empty:
+                    ref_series = ref_df["Close"] if "Close" in ref_df.columns else (ref_df["Adj Close"] if "Adj Close" in ref_df.columns else ref_df.iloc[:, 0])
+                    ax2.plot(ref_series.index, ref_series.values, label=ref_sym, color="#ff9f0a")
+            # Legends: combine from both axes
+            try:
+                lines, labels = ax.get_legend_handles_labels()
+                lines2, labels2 = ax2.get_legend_handles_labels()
+                leg = ax.legend(lines + lines2, labels + labels2, facecolor="#1e1e1e", edgecolor="#333333", labelcolor="#ffffff")
+            except Exception:
+                ax.legend(facecolor="#1e1e1e", edgecolor="#333333", labelcolor="#ffffff")
         ax.grid(True, color="#333333", linestyle="--", linewidth=0.5)
         for spine in ax.spines.values():
             spine.set_color("#666666")
+        for spine in ax2.spines.values():
+            spine.set_color("#666666")
         update_axes_fonts(ax, font_scale)
+        update_axes_fonts(ax2, font_scale)
         canvas.draw_idle()
 
     symbols_list.bind("<<ListboxSelect>>", lambda _e: plot_selected())

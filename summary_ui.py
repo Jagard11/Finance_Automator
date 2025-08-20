@@ -68,6 +68,9 @@ def build_summary_ui(parent: tk.Widget) -> None:
     top.pack(fill="x", padx=8, pady=8)
 
     ttk.Button(top, text="Refresh", command=lambda: reload_and_refresh()).pack(side="right")
+    # Show active portfolio file
+    active_file_var = tk.StringVar(value=os.path.basename(portfolio_path))
+    ttk.Label(top, textvariable=active_file_var).pack(side="right", padx=(0, 12))
 
     metrics = ttk.Frame(parent)
     metrics.pack(fill="x", padx=8, pady=(0, 8))
@@ -362,17 +365,23 @@ def build_summary_ui(parent: tk.Widget) -> None:
         tree.heading(col, text=tree.heading(col, option="text"), command=lambda c=col: on_sort(c))
 
     def reload_and_refresh() -> None:
-        nonlocal portfolio, last_price_cache, last_mtime
+        nonlocal portfolio, last_price_cache, last_mtime, portfolio_path
         # Only reload from disk if file changed to avoid thrashing caches
         try:
             m = os.path.getmtime(portfolio_path) if os.path.exists(portfolio_path) else 0.0
         except Exception:
             m = last_mtime
+        # Always resolve current default path in case it was swapped
+        portfolio_path = storage.default_portfolio_path()
         if m > last_mtime:
             last_mtime = m
             portfolio = storage.load_portfolio()
         # Preserve last_price_cache across refreshes so we don't re-read CSVs unnecessarily
         recompute_and_fill()
+        try:
+            active_file_var.set(os.path.basename(portfolio_path))
+        except Exception:
+            pass
 
     # Initial load
     reload_and_refresh()
