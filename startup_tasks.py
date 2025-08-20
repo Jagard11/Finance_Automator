@@ -8,6 +8,7 @@ from prefetch import collect_all_symbols, fetch_and_cache_symbol
 from dividends import cache_and_ingest_dividends_for_file
 from values_cache import warm_values_cache_for_portfolio, mark_symbol_dirty
 from journal_builder import build_journal_csv_streaming
+from settings import vprint
 import storage
 
 
@@ -48,6 +49,7 @@ def _run_all(progress_q: Optional[mp.Queue] = None, task_q: Optional[mp.Queue] =
     # After prefetch, ingest dividends for each portfolio file with cache-awareness
     for path in storage.list_portfolio_paths():
         try:
+            vprint(f"startup: ingest_dividends {path}")
             added = cache_and_ingest_dividends_for_file(path)
             send({"type": "dividends:ingested", "path": path, "added": int(added)})
         except Exception as exc:  # noqa: BLE001
@@ -56,6 +58,7 @@ def _run_all(progress_q: Optional[mp.Queue] = None, task_q: Optional[mp.Queue] =
     # Warm values cache
     for path in storage.list_portfolio_paths():
         try:
+            vprint(f"startup: warm_values {path}")
             updated = warm_values_cache_for_portfolio(path)
             send({"type": "values:warmed", "path": path, "updated": int(updated)})
         except Exception as exc:  # noqa: BLE001
@@ -64,6 +67,7 @@ def _run_all(progress_q: Optional[mp.Queue] = None, task_q: Optional[mp.Queue] =
     # Rebuild journals now that values are up to date
     for path in storage.list_portfolio_paths():
         try:
+            vprint(f"startup: rebuild_journal {path}")
             build_journal_csv_streaming(path)
             send({"type": "journal:rebuilt", "path": path})
         except Exception as exc:  # noqa: BLE001

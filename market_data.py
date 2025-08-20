@@ -10,6 +10,7 @@ import yfinance as yf
 import os
 
 from prefetch import cache_dir as get_cache_dir
+from settings import vprint, VERBOSE
 
 T = TypeVar("T")
 
@@ -27,14 +28,17 @@ def _with_retries(func: Callable[[], T], attempts: int = 3, base_delay: float = 
 
 
 def fetch_nasdaq_symbols() -> List[str]:
+    vprint("fetch_nasdaq_symbols: start")
     url = "https://datahub.io/core/nasdaq-listings/r/nasdaq-listed-symbols.csv"
     df = pd.read_csv(url)
     symbol_col = "Symbol" if "Symbol" in df.columns else df.columns[0]
     symbols = df[symbol_col].dropna().astype(str).str.upper().unique().tolist()
+    vprint(f"fetch_nasdaq_symbols: symbols={len(symbols)}")
     return symbols
 
 
 def fetch_price_history(symbol: str, start_date: str, end_date: str, avoid_network: bool = False) -> pd.DataFrame:
+    vprint(f"fetch_price_history: sym={symbol} {start_date}..{end_date} avoid_network={avoid_network}")
     # Prefer cached CSV from prefetch when available, then fall back to yfinance
     def _read_cache() -> Optional[pd.DataFrame]:
         path = os.path.join(get_cache_dir(), f"{symbol.upper()}_prices.csv")
@@ -81,21 +85,27 @@ def fetch_price_history(symbol: str, start_date: str, end_date: str, avoid_netwo
 
     cached = _read_cache()
     if cached is not None and not cached.empty:
+        vprint(f"fetch_price_history: cache hit rows={len(cached)} cols={list(cached.columns)}")
         return cached
 
     if avoid_network:
+        vprint("fetch_price_history: avoid_network; returning empty")
         return pd.DataFrame()
 
     result = _with_retries(_call_api)
     if result is None:
+        vprint("fetch_price_history: api failed")
         return pd.DataFrame()
+    vprint(f"fetch_price_history: api rows={len(result)}")
     return result
 
 
 def fetch_dividends(symbol: str, start_date: str, end_date: str) -> pd.Series:
+    vprint(f"fetch_dividends: sym={symbol} {start_date}..{end_date}")
     ticker = yf.Ticker(symbol)
     div = ticker.dividends
     if div is None or div.empty:
+        vprint("fetch_dividends: empty")
         return pd.Series(dtype="float64")
     # Ensure index is tz-naive for safe comparison
     if isinstance(div.index, pd.DatetimeIndex) and div.index.tz is not None:
@@ -103,4 +113,6 @@ def fetch_dividends(symbol: str, start_date: str, end_date: str) -> pd.Series:
     # Filter by date range
     start = pd.to_datetime(start_date)
     end = pd.to_datetime(end_date)
-    return div[(div.index >= start) & (div.index <= end)]
+    out = div[(div.index >= start) & (div.index <= end)]
+    vprint(f"fetch_dividends: rows={len(out)}")
+    return out

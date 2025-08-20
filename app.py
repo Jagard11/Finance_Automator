@@ -11,6 +11,7 @@ from summary_ui import build_summary_ui, register_summary_tab_handlers
 from journal_ui import build_journal_ui, register_journal_tab_handlers
 from theme import apply_dark_theme
 from startup_tasks import run_startup_tasks_in_background, get_progress_queue
+from settings import VERBOSE
 
 
 def main() -> None:
@@ -169,7 +170,12 @@ def main() -> None:
                     drained += 1
                     # On any progress affecting portfolio/caches, schedule a refresh
                     t = str(msg.get("type", ""))
-                    if t.startswith("dividends:") or t.startswith("values:") or t in {"prefetch:done", "startup:complete"}:
+                    if VERBOSE:
+                        try:
+                            print(f"worker: {t} {msg}")
+                        except Exception:
+                            pass
+                    if t.startswith("dividends:") or t.startswith("values:") or t in {"prefetch:done", "startup:complete", "journal:rebuilt"}:
                         with profiler.section("refresh_all"):
                             refresh_all_throttled()
         # Poll at ~10 fps

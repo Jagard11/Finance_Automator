@@ -11,6 +11,7 @@ import storage
 from models import Portfolio, Holding, EventType
 from market_data import fetch_price_history
 from prefetch import cache_dir as get_cache_dir
+from settings import vprint
 
 
 _DIRTY_FILE = os.path.join(get_cache_dir(), "dirty_symbols.json")
@@ -51,18 +52,23 @@ def clear_symbol_dirty(symbol: str) -> None:
 
 
 def read_values_cache(symbol: str) -> pd.DataFrame:
+    vprint(f"read_values_cache: {symbol}")
     path = values_cache_path(symbol)
     if not os.path.exists(path):
+        vprint("read_values_cache: missing")
         return pd.DataFrame()
     try:
         df = pd.read_csv(path, parse_dates=["date"])
         df.sort_values("date", inplace=True)
+        vprint(f"read_values_cache: rows={len(df)}")
         return df
     except Exception:
+        vprint("read_values_cache: error")
         return pd.DataFrame()
 
 
 def compute_and_write_values_for_holding(holding: Holding, start_iso: str, end_iso: Optional[str] = None) -> bool:
+    vprint(f"compute_and_write_values_for_holding: {holding.symbol} {start_iso}->{end_iso}")
     symbol = holding.symbol.upper()
     end_iso = end_iso or date.today().isoformat()
     # Fetch prices
@@ -70,6 +76,7 @@ def compute_and_write_values_for_holding(holding: Holding, start_iso: str, end_i
     df = fetch_price_history(symbol, start_iso, end_plus)
     if df is None or df.empty:
         # Still write empty to indicate attempted
+        vprint("compute_and_write_values_for_holding: empty prices")
         pd.DataFrame({"date": [], "shares": [], "value": []}).to_csv(values_cache_path(symbol), index=False)
         return False
     series = df["Close"] if "Close" in df.columns else df.iloc[:, 0]
@@ -98,10 +105,12 @@ def compute_and_write_values_for_holding(holding: Holding, start_iso: str, end_i
     out = pd.DataFrame({"date": values.index.date, "shares": shares.values, "value": values.values})
     os.makedirs(os.path.dirname(values_cache_path(symbol)), exist_ok=True)
     out.to_csv(values_cache_path(symbol), index=False)
+    vprint(f"compute_and_write_values_for_holding: wrote rows={len(out)} -> {values_cache_path(symbol)}")
     return True
 
 
 def warm_values_cache_for_portfolio(portfolio_path: str) -> int:
+    vprint(f"warm_values_cache_for_portfolio: {portfolio_path}")
     portfolio = storage.load_portfolio(portfolio_path)
     changes = 0
     port_mtime = os.path.getmtime(portfolio_path) if os.path.exists(portfolio_path) else 0.0
@@ -120,4 +129,5 @@ def warm_values_cache_for_portfolio(portfolio_path: str) -> int:
             if compute_and_write_values_for_holding(h, start_iso):
                 changes += 1
             clear_symbol_dirty(symbol)
+    vprint(f"warm_values_cache_for_portfolio: updated={changes}")
     return changes

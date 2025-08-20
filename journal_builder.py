@@ -11,6 +11,7 @@ import pandas as pd
 import storage
 from prefetch import cache_dir as get_cache_dir
 from values_cache import read_values_cache
+from settings import vprint
 
 
 def journal_csv_path(portfolio_path: Optional[str] = None) -> str:
@@ -20,6 +21,7 @@ def journal_csv_path(portfolio_path: Optional[str] = None) -> str:
 
 
 def build_journal_csv_streaming(portfolio_path: Optional[str] = None) -> None:
+    vprint(f"build_journal_csv_streaming: start {portfolio_path}")
     portfolio = storage.load_portfolio(portfolio_path)
     symbols: List[str] = [h.symbol for h in portfolio.holdings]
     if not symbols:
@@ -29,6 +31,7 @@ def build_journal_csv_streaming(portfolio_path: Optional[str] = None) -> None:
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["date"] + symbols)
+        vprint("build_journal_csv_streaming: no symbols")
         return
 
     # Load per-symbol values caches
@@ -63,6 +66,7 @@ def build_journal_csv_streaming(portfolio_path: Optional[str] = None) -> None:
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["date"] + symbols)
+        vprint("build_journal_csv_streaming: empty index")
         return
 
     # Sort symbols for consistent columns
@@ -101,6 +105,7 @@ def build_journal_csv_streaming(portfolio_path: Optional[str] = None) -> None:
         if buffer:
             writer.writerows(buffer)
             f.flush()
+    vprint(f"build_journal_csv_streaming: wrote to {path}")
 
 
 _proc: Optional[mp.Process] = None

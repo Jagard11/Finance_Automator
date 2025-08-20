@@ -1,6 +1,7 @@
 import json
 import os
 from typing import Any, Dict
+import sys
 
 import storage
 
@@ -33,3 +34,12 @@ def save_settings(settings: Dict[str, Any]) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=2)
+
+
+# Runtime flags
+VERBOSE: bool = any(arg == "--verbose" for arg in sys.argv)
+
+
+def vprint(*args: Any, **kwargs: Any) -> None:
+    if VERBOSE:
+        print(*args, **kwargs)
