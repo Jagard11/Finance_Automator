@@ -3,6 +3,7 @@ from tkinter import ttk, messagebox
 from tkinter import simpledialog
 from typing import Optional
 from datetime import datetime
+import os
 
 from models import Portfolio, Holding, Event, EventType
 import storage
@@ -13,6 +14,10 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
 
     # Track selected holding symbol explicitly
     selected_holding_symbol: Optional[str] = None
+
+    # Track portfolio file for change detection
+    portfolio_path = storage.default_portfolio_path()
+    last_mtime = os.path.getmtime(portfolio_path) if os.path.exists(portfolio_path) else 0.0
 
     # Top controls
     top_frame = ttk.Frame(parent)
@@ -497,6 +502,7 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             refresh_events_list()
 
     def on_holdings_double_click(evt) -> None:  # noqa: ANN001
+        nonlocal selected_holding_symbol
         # Double-clicking the "--- New Symbol ---" row prompts for a new symbol
         index = holdings_list.nearest(evt.y)
         try:
@@ -515,9 +521,27 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             messagebox.showinfo("Already exists", f"{sym} is already in the portfolio.")
             return
         portfolio.ensure_holding(sym)
-        nonlocal selected_holding_symbol
         selected_holding_symbol = sym
         refresh_holdings_list()
+
+    def poll_for_changes() -> None:
+        nonlocal last_mtime, portfolio, selected_holding_symbol
+        try:
+            mtime = os.path.getmtime(portfolio_path) if os.path.exists(portfolio_path) else 0.0
+        except Exception:
+            mtime = last_mtime
+        if mtime > last_mtime:
+            last_mtime = mtime
+            # Reload portfolio from disk
+            current_symbol = selected_holding_symbol
+            portfolio = storage.load_portfolio(portfolio_path)
+            portfolio_name_var.set(portfolio.name)
+            reinvest_var.set(portfolio.dividend_reinvest)
+            # Keep selection
+            refresh_holdings_list()
+            if current_symbol:
+                selected_holding_symbol = current_symbol
+        parent.after(2000, poll_for_changes)
 
     events_tree.bind("<Double-1>", on_tree_double_click)
     events_tree.bind("<Delete>", on_delete_key)
@@ -544,3 +568,5 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
 
     # Initial population and selection
     refresh_holdings_list()
+    # Start polling for external changes (e.g., background dividend ingestion)
+    parent.after(2000, poll_for_changes)
