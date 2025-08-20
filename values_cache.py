@@ -68,6 +68,14 @@ def read_values_cache(symbol: str) -> pd.DataFrame:
 
 
 def compute_and_write_values_for_holding(holding: Holding, start_iso: str, end_iso: Optional[str] = None) -> bool:
+    # Normalize dates to ISO YYYY-MM-DD
+    def _norm(s: str) -> str:
+        try:
+            return pd.to_datetime(s).date().isoformat()
+        except Exception:
+            return s
+
+    start_iso = _norm(start_iso)
     vprint(f"compute_and_write_values_for_holding: {holding.symbol} {start_iso}->{end_iso}")
     symbol = holding.symbol.upper()
     end_iso = end_iso or date.today().isoformat()
@@ -79,7 +87,17 @@ def compute_and_write_values_for_holding(holding: Holding, start_iso: str, end_i
         vprint("compute_and_write_values_for_holding: empty prices")
         pd.DataFrame({"date": [], "shares": [], "value": []}).to_csv(values_cache_path(symbol), index=False)
         return False
-    series = df["Close"] if "Close" in df.columns else df.iloc[:, 0]
+    # Prefer Close, then Adj Close, else first column
+    series = df["Close"] if "Close" in df.columns else (df["Adj Close"] if "Adj Close" in df.columns else df.iloc[:, 0])
+    # Normalize index to tz-naive to avoid tz comparison issues
+    try:
+        if isinstance(series.index, pd.DatetimeIndex) and series.index.tz is not None:
+            series.index = series.index.tz_convert("UTC").tz_localize(None)
+    except Exception:
+        try:
+            series.index = pd.to_datetime(series.index, errors="coerce").tz_localize(None)
+        except Exception:
+            pass
     series = series.dropna()
     idx = series.index
     # Build shares cumulative series on same index
@@ -89,8 +107,13 @@ def compute_and_write_values_for_holding(holding: Holding, start_iso: str, end_i
             continue
         try:
             ts = pd.Timestamp(ev.date)
+            if ts.tz is not None:
+                ts = ts.tz_convert("UTC").tz_localize(None)
         except Exception:
-            continue
+            try:
+                ts = pd.to_datetime(ev.date, errors="coerce").tz_localize(None)
+            except Exception:
+                continue
         # Align event to the first index at or after the event date
         pos = changes.index.searchsorted(ts, side="left")
         if pos >= len(changes.index):
@@ -115,12 +138,27 @@ def warm_values_cache_for_portfolio(portfolio_path: str) -> int:
     changes = 0
     port_mtime = os.path.getmtime(portfolio_path) if os.path.exists(portfolio_path) else 0.0
     dirty = _read_dirty()
+    def _cache_has_data(path: str) -> bool:
+        if not os.path.exists(path):
+            return False
+        try:
+            # Fast check: at least one data row beyond header
+            with open(path, "r", encoding="utf-8") as f:
+                cnt = 0
+                for _ in f:
+                    cnt += 1
+                    if cnt > 1:
+                        return True
+            return False
+        except Exception:
+            return False
+
     for h in portfolio.holdings:
         symbol = h.symbol.upper()
         # Determine if cache missing or stale or marked dirty
         cache_path = values_cache_path(symbol)
         cache_mtime = os.path.getmtime(cache_path) if os.path.exists(cache_path) else 0.0
-        if (not os.path.exists(cache_path)) or (cache_mtime < port_mtime) or (symbol in dirty):
+        if (not os.path.exists(cache_path)) or (cache_mtime < port_mtime) or (symbol in dirty) or (not _cache_has_data(cache_path)):
             # Compute from first event to today
             dates = [ev.date for ev in h.events if ev.date]
             if not dates:

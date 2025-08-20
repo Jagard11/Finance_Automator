@@ -115,11 +115,14 @@ def _run_all(progress_q: Optional[mp.Queue] = None, task_q: Optional[mp.Queue] =
             for p in paths:
                 try:
                     updated = warm_values_cache_for_portfolio(p)
+                    # After warming, rebuild journal for that portfolio
+                    build_journal_csv_streaming(p)
                 except Exception as exc:  # noqa: BLE001
                     send({"type": "values:error", "path": p, "error": str(exc)})
                     continue
                 total_updated += int(updated)
                 send({"type": "values:warmed", "path": p, "updated": int(updated)})
+                send({"type": "journal:rebuilt", "path": p})
             if total_updated:
                 send({"type": "values:done", "updated": total_updated})
             continue

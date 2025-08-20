@@ -14,6 +14,7 @@ from models import Portfolio, Holding
 import storage
 from market_data import fetch_price_history
 from values_cache import read_values_cache
+from settings import vprint
 import pandas as pd
 
 
@@ -288,14 +289,23 @@ def build_charts_ui(parent: tk.Widget) -> None:
             vdf = read_values_cache(symbol)
             if vdf is not None and not vdf.empty:
                 try:
-                    vdf = vdf[(vdf["date"] >= start) & (vdf["date"] <= date.fromisoformat(end))]
+                    start_dt = pd.to_datetime(start)
+                    end_dt = pd.to_datetime(end)
                     vdf = vdf.copy()
-                    vdf["date"] = vdf["date"].dt.tz_localize(None) if hasattr(vdf["date"], "dt") else vdf["date"]
+                    # Ensure tz-naive
+                    if hasattr(vdf["date"], "dt"):
+                        try:
+                            vdf["date"] = vdf["date"].dt.tz_localize(None)
+                        except Exception:
+                            pass
+                    mask = (vdf["date"] >= start_dt) & (vdf["date"] <= end_dt)
+                    vdf = vdf.loc[mask]
                     vdf.set_index("date", inplace=True)
                     shares = pd.to_numeric(vdf.get("shares"), errors="coerce")
                     values = pd.to_numeric(vdf.get("value"), errors="coerce")
                     price = values.divide(shares.where(shares > 0))
                     price = price.dropna()
+                    vprint(f"charts: derived price rows={len(price)} for {symbol}")
                     if not price.empty:
                         ax.plot(price.index, price.values, label=f"{symbol} (derived)", color="#0a84ff")
                         ax.legend(facecolor="#1e1e1e", edgecolor="#333333", labelcolor="#ffffff")

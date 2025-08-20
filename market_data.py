@@ -59,8 +59,12 @@ def fetch_price_history(symbol: str, start_date: str, end_date: str, avoid_netwo
                 if len(columns) > 1:
                     usecols.append(columns[1])
             df = pd.read_csv(path, index_col=0, usecols=usecols, memory_map=True)
-            # Ensure index is datetime (accept date or datetime)
+            # Ensure index is datetime (accept date or datetime) and tz-naive
             idx = pd.to_datetime(df.index, errors="coerce")
+            try:
+                idx = idx.tz_localize(None)
+            except Exception:
+                pass
             mask = ~idx.isna()
             if not mask.any():
                 return None
@@ -81,6 +85,16 @@ def fetch_price_history(symbol: str, start_date: str, end_date: str, avoid_netwo
         data = ticker.history(start=start_date, end=end_date, auto_adjust=True, timeout=20)
         if not isinstance(data, pd.DataFrame) or data.empty:
             return pd.DataFrame()
+        # Ensure tz-naive index to avoid compare errors downstream
+        try:
+            if isinstance(data.index, pd.DatetimeIndex) and data.index.tz is not None:
+                data.index = data.index.tz_convert("UTC").tz_localize(None)
+        except Exception:
+            try:
+                # Some yfinance versions use tz-aware without tzinfo set directly
+                data.index = pd.to_datetime(data.index, errors="coerce").tz_localize(None)
+            except Exception:
+                pass
         return data
 
     cached = _read_cache()
