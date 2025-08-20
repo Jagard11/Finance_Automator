@@ -56,6 +56,7 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     events_tree.heading("amount", text="Amount")
     events_tree.heading("note", text="Note")
 
+    # Initial column widths (will be auto-adjusted on font scale changes)
     events_tree.column("symbol", width=100, anchor="w")
     events_tree.column("date", width=120, anchor="w")
     events_tree.column("type", width=110, anchor="w")
@@ -64,7 +65,7 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     events_tree.column("amount", width=90, anchor="e")
     events_tree.column("note", width=300, anchor="w")
 
-    # Placeholders for new row prompts
+    # Placeholders for new row prompts and draft buffer for new entry
     placeholder_symbol = "Enter symbol"
     placeholder_date = "YYYY-MM-DD"
     placeholder_type = "purchase"
@@ -73,7 +74,6 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     placeholder_amount = "amount"
     placeholder_note = "--- New Entry ---"
 
-    # Draft buffer for the new row (do not create event until sufficient info exists)
     new_entry_values = {
         "symbol": "",
         "date": "",
@@ -83,6 +83,25 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
         "amount": "",
         "note": "",
     }
+
+    def auto_size_columns() -> None:
+        try:
+            from tkinter import font as tkfont
+            f = tkfont.nametofont("TkDefaultFont")
+            # Estimate width by character units times a factor
+            def ch(n: int) -> int:
+                return int(n * max(6, f.measure("0")) / 1.6)
+            events_tree.column("symbol", width=ch(10))
+            events_tree.column("date", width=ch(12))
+            events_tree.column("type", width=ch(12))
+            events_tree.column("shares", width=ch(10))
+            events_tree.column("price", width=ch(10))
+            events_tree.column("amount", width=ch(10))
+            events_tree.column("note", width=ch(40))
+        except Exception:
+            pass
+
+    parent.bind("<<FontScaleChanged>>", lambda _e: auto_size_columns())
 
     # Helpers: date parsing/formatting and sorting
     def parse_date_for_sorting(date_str: str) -> tuple[int, int, int]:
@@ -161,6 +180,7 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             selected_holding_symbol = current_symbol
         refresh_events_list()
         refresh_symbols_label()
+        auto_size_columns()
 
     # Inline cell editing state
     edit_widget: Optional[tk.Widget] = None

@@ -2,9 +2,72 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
+from tkinter import font as tkfont
+
+import settings
 
 
-def apply_dark_theme(root: tk.Tk) -> None:
+_DEFAULT_FONTS = {
+    "TkDefaultFont": ("Sans", 10),
+    "TkTextFont": ("Sans", 10),
+    "TkFixedFont": ("Monospace", 10),
+    "TkMenuFont": ("Sans", 10),
+    "TkHeadingFont": ("Sans", 11, "bold"),
+    "TkIconFont": ("Sans", 10),
+    "TkTooltipFont": ("Sans", 9),
+}
+
+
+class FontScaler:
+    def __init__(self, root: tk.Tk, initial_scale: float) -> None:
+        self.root = root
+        self.scale = max(0.5, min(initial_scale, 3.0))
+        self._init_named_fonts()
+        self.apply_scale()
+
+    def _init_named_fonts(self) -> None:
+        for name, (family, size, *style) in _DEFAULT_FONTS.items():
+            try:
+                f = tkfont.nametofont(name)
+            except tk.TclError:
+                f = tkfont.Font(name=name, exists=False)
+            f.config(family=family, size=size, weight=(style[0] if style else "normal"))
+
+    def apply_scale(self) -> None:
+        for name in _DEFAULT_FONTS.keys():
+            f = tkfont.nametofont(name)
+            base = _DEFAULT_FONTS[name][1]
+            f.configure(size=max(6, int(round(base * self.scale))))
+        # Scale common widget metrics
+        style = ttk.Style(self.root)
+        base_row = 22
+        style.configure("Treeview", rowheight=max(16, int(round(base_row * self.scale))))
+        # Increase control heights to avoid cropped text
+        pad_v = max(2, int(round(4 * self.scale)))
+        pad_h = max(4, int(round(6 * self.scale)))
+        style.configure("TEntry", padding=(pad_h, pad_v))
+        style.configure("TCombobox", padding=(pad_h, pad_v))
+        style.configure("TButton", padding=(pad_h, pad_v))
+        # Force redraw
+        self.root.update_idletasks()
+
+    def update_scale(self, new_scale: float) -> None:
+        self.scale = max(0.5, min(new_scale, 3.0))
+        self.apply_scale()
+        s = settings.load_settings()
+        s["font_scale"] = self.scale
+        settings.save_settings(s)
+        # Broadcast a virtual event so views can react (e.g., update charts/fonts/column widths)
+        try:
+            self.root.event_generate("<<FontScaleChanged>>", when="tail")
+        except Exception:
+            pass
+
+
+def apply_dark_theme(root: tk.Tk) -> FontScaler:
+    s = settings.load_settings()
+    scaler = FontScaler(root, float(s.get("font_scale", 1.25)))
+
     bg = "#121212"
     surface = "#1e1e1e"
     text = "#ffffff"
@@ -72,7 +135,7 @@ def apply_dark_theme(root: tk.Tk) -> None:
         bordercolor=surface,
         lightcolor=surface,
         darkcolor=surface,
-        rowheight=22,
+        rowheight=max(16, int(round(22 * scaler.scale))),
     )
     style.map(
         "Treeview",
@@ -85,3 +148,5 @@ def apply_dark_theme(root: tk.Tk) -> None:
         background=[("active", surface)],
         foreground=[("!disabled", text)],
     )
+
+    return scaler

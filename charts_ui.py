@@ -2,10 +2,12 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import date, timedelta, datetime
 from typing import Optional, List, Tuple, Dict
+import os
 
 import matplotlib
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+import pandas as pd
 
 from models import Portfolio, Holding
 import storage
@@ -19,7 +21,10 @@ def build_charts_ui(parent: tk.Widget) -> None:
     portfolio: Portfolio = storage.load_portfolio()
 
     # cache for ROI computations per symbol to keep UI snappy
-    roi_cache: Dict[str, float] = {}
+    roi_cache: Dict[str, Optional[float]] = {}
+
+    # Figure font scaling factor; updated via virtual event
+    font_scale = 1.0
 
     # Left panel: sort + symbols list; Right panel: chart
     main_pane = ttk.PanedWindow(parent, orient=tk.HORIZONTAL)
@@ -56,19 +61,44 @@ def build_charts_ui(parent: tk.Widget) -> None:
     symbols_list.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
     # Figure area with dark style
-    matplotlib.rcParams.update({
-        "axes.facecolor": "#1e1e1e",
-        "figure.facecolor": "#121212",
-        "savefig.facecolor": "#121212",
-        "text.color": "#ffffff",
-        "axes.labelcolor": "#ffffff",
-        "axes.edgecolor": "#cccccc",
-        "xtick.color": "#cccccc",
-        "ytick.color": "#cccccc",
-        "grid.color": "#333333",
-    })
+    def apply_matplotlib_style(scale: float) -> None:
+        base = 10 * scale
+        matplotlib.rcParams.update({
+            "axes.facecolor": "#1e1e1e",
+            "figure.facecolor": "#121212",
+            "savefig.facecolor": "#121212",
+            "text.color": "#ffffff",
+            "axes.labelcolor": "#ffffff",
+            "axes.edgecolor": "#cccccc",
+            "xtick.color": "#cccccc",
+            "ytick.color": "#cccccc",
+            "grid.color": "#333333",
+            "font.size": base,
+            "axes.titlesize": base + 2,
+            "axes.labelsize": base,
+            "xtick.labelsize": base - 1,
+            "ytick.labelsize": base - 1,
+            "legend.fontsize": base - 1,
+        })
 
-    fig = Figure(figsize=(8, 5), dpi=100, facecolor="#121212")
+    def update_axes_fonts(ax, scale: float) -> None:
+        base = 10 * scale
+        try:
+            ax.title.set_fontsize(base + 2)
+            ax.xaxis.label.set_size(base)
+            ax.yaxis.label.set_size(base)
+            for lbl in ax.get_xticklabels() + ax.get_yticklabels():
+                lbl.set_fontsize(base - 1)
+            leg = ax.get_legend()
+            if leg is not None:
+                for txt in leg.get_texts():
+                    txt.set_fontsize(base - 1)
+        except Exception:
+            pass
+
+    apply_matplotlib_style(font_scale)
+
+    fig = Figure(figsize=(8, 5), dpi=100, facecolor="#121212", constrained_layout=True)
     ax = fig.add_subplot(111, facecolor="#1e1e1e")
     ax.set_title("Price History", color="#ffffff")
     ax.set_xlabel("Date", color="#ffffff")
@@ -77,6 +107,22 @@ def build_charts_ui(parent: tk.Widget) -> None:
     canvas = FigureCanvasTkAgg(fig, master=right)
     canvas_widget = canvas.get_tk_widget()
     canvas_widget.pack(fill="both", expand=True)
+
+    def on_font_scale_changed(_evt=None):  # noqa: ANN001
+        # Derive scale from Tk default font size relative to base 10
+        try:
+            from tkinter import font as tkfont  # lazy import
+            f = tkfont.nametofont("TkDefaultFont")
+            current = f.cget("size")
+            nonlocal font_scale
+            font_scale = max(0.6, min(3.0, current / 10.0))
+        except Exception:
+            pass
+        apply_matplotlib_style(font_scale)
+        update_axes_fonts(ax, font_scale)
+        canvas.draw_idle()
+
+    parent.bind("<<FontScaleChanged>>", on_font_scale_changed)
 
     def normalize_date(date_str: str) -> str:
         s = (date_str or "").strip()
@@ -122,6 +168,20 @@ def build_charts_ui(parent: tk.Widget) -> None:
         end = last_flat or date.today().isoformat()
         return start, end
 
+    def load_cached_close_series(symbol: str) -> Optional[pd.Series]:
+        cache_path = os.path.join(storage.default_data_dir(), "cache", f"{symbol.upper()}_prices.csv")
+        if not os.path.exists(cache_path):
+            return None
+        try:
+            df = pd.read_csv(cache_path, index_col=0, parse_dates=True)
+            if df is None or df.empty:
+                return None
+            if "Close" in df.columns:
+                return df["Close"]
+            return df.iloc[:, 0]
+        except Exception:
+            return None
+
     def compute_holding_return(holding: Holding) -> Optional[float]:
         # simple ROI: (last_close / first_close) - 1 over the holding date range
         sym = holding.symbol.upper()
@@ -129,19 +189,30 @@ def build_charts_ui(parent: tk.Widget) -> None:
             return roi_cache[sym]
         start, end = compute_date_range(holding)
         end_plus = (date.fromisoformat(end) + timedelta(days=1)).isoformat()
-        df = fetch_price_history(sym, start, end_plus)
-        if df is None or df.empty:
-            roi_cache[sym] = None  # type: ignore[assignment]
-            return None
-        series = df["Close"] if "Close" in df.columns else df.iloc[:, 0]
+        # Prefer cached data to avoid fetch lag
+        series = load_cached_close_series(sym)
+        if series is None:
+            df = fetch_price_history(sym, start, end_plus)
+            if df is None or df.empty:
+                roi_cache[sym] = None
+                return None
+            series = df["Close"] if "Close" in df.columns else df.iloc[:, 0]
+        # Filter to range and compute
         try:
-            first_price = float(series.dropna().iloc[0])
-            last_price = float(series.dropna().iloc[-1])
+            s = series.dropna()
+            if isinstance(s.index, pd.DatetimeIndex):
+                s = s.loc[pd.to_datetime(start) : pd.to_datetime(end)]
+            vals = s.to_numpy()
+            if vals.size == 0:
+                roi_cache[sym] = None
+                return None
+            first_price = float(vals[0])
+            last_price = float(vals[-1])
         except Exception:
-            roi_cache[sym] = None  # type: ignore[assignment]
+            roi_cache[sym] = None
             return None
         if first_price <= 0:
-            roi_cache[sym] = None  # type: ignore[assignment]
+            roi_cache[sym] = None
             return None
         roi = (last_price / first_price) - 1.0
         roi_cache[sym] = roi
@@ -238,12 +309,14 @@ def build_charts_ui(parent: tk.Widget) -> None:
         ax.grid(True, color="#333333", linestyle="--", linewidth=0.5)
         for spine in ax.spines.values():
             spine.set_color("#666666")
+        update_axes_fonts(ax, font_scale)
         canvas.draw()
 
     symbols_list.bind("<<ListboxSelect>>", lambda _e: plot_selected())
     sort_combo.bind("<<ComboboxSelected>>", lambda _e: refresh_symbols())
 
     # Initial load
+    apply_matplotlib_style(font_scale)
     reload_portfolio()
 
     # Expose a hook on the parent so external code can trigger a refresh/plot
