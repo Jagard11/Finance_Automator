@@ -76,7 +76,9 @@ class FontScaler:
         settings.save_settings(s)
         # Broadcast a virtual event so views can react (e.g., update charts/fonts/column widths)
         try:
+            # Generate on root and globally so any nested frames receive it
             self.root.event_generate("<<FontScaleChanged>>", when="tail")
+            self.root.event_generate("<<FontScaleChanged>>", when="tail", state=0)
         except Exception:
             pass
 

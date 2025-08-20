@@ -84,9 +84,9 @@ def build_charts_ui(parent: tk.Widget) -> None:
             "savefig.facecolor": "#121212",
             "text.color": "#ffffff",
             "axes.labelcolor": "#ffffff",
-            "axes.edgecolor": "#cccccc",
-            "xtick.color": "#cccccc",
-            "ytick.color": "#cccccc",
+            "axes.edgecolor": "#ffffff",
+            "xtick.color": "#ffffff",
+            "ytick.color": "#ffffff",
             "grid.color": "#333333",
             "font.size": base,
             "axes.titlesize": base + 2,
@@ -102,8 +102,26 @@ def build_charts_ui(parent: tk.Widget) -> None:
             ax.title.set_fontsize(base + 2)
             ax.xaxis.label.set_size(base)
             ax.yaxis.label.set_size(base)
-            for lbl in ax.get_xticklabels() + ax.get_yticklabels():
+            # Tick labels: size, color, and x-axis rotation for density
+            for lbl in ax.get_xticklabels():
                 lbl.set_fontsize(base - 1)
+                try:
+                    lbl.set_color("#ffffff")
+                    lbl.set_rotation(45)
+                    lbl.set_ha("right")
+                    lbl.set_rotation_mode("anchor")
+                except Exception:
+                    pass
+            for lbl in ax.get_yticklabels():
+                lbl.set_fontsize(base - 1)
+                try:
+                    lbl.set_color("#ffffff")
+                except Exception:
+                    pass
+            try:
+                ax.tick_params(axis="both", which="both", labelsize=base - 1, colors="#ffffff")
+            except Exception:
+                pass
             leg = ax.get_legend()
             if leg is not None:
                 for txt in leg.get_texts():
@@ -111,8 +129,26 @@ def build_charts_ui(parent: tk.Widget) -> None:
         except Exception:
             pass
 
+    def apply_date_axis_format(target_ax) -> None:
+        try:
+            mdates = matplotlib.dates
+            # Allow many ticks; Concise formatter shortens labels so we can show more
+            locator = mdates.AutoDateLocator(minticks=8, maxticks=24)
+            formatter = mdates.ConciseDateFormatter(locator)
+            target_ax.xaxis.set_major_locator(locator)
+            target_ax.xaxis.set_major_formatter(formatter)
+        except Exception:
+            try:
+                # Fallback: default AutoDateLocator if Concise not available
+                mdates = matplotlib.dates
+                target_ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+                target_ax.xaxis.set_major_formatter(mdates.AutoDateFormatter(mdates.AutoDateLocator()))
+            except Exception:
+                pass
+
     apply_matplotlib_style(font_scale)
 
+    # Create figure; we'll explicitly set sizes/fonts on scale change
     fig = Figure(figsize=(8, 5), dpi=100, facecolor="#121212", constrained_layout=True)
     ax = fig.add_subplot(111, facecolor="#1e1e1e")
     ax2 = ax.twinx()
@@ -125,24 +161,45 @@ def build_charts_ui(parent: tk.Widget) -> None:
     canvas_widget.pack(fill="both", expand=True)
 
     def on_font_scale_changed(_evt=None):  # noqa: ANN001
-        # Derive scale from Tk default font size relative to base 10
+        # Prefer reading scale from saved settings; fallback to Tk font size
+        nonlocal font_scale
+        updated = False
         try:
-            from tkinter import font as tkfont  # lazy import
-            f = tkfont.nametofont("TkDefaultFont")
-            current = f.cget("size")
-            nonlocal font_scale
-            font_scale = max(0.6, min(3.0, current / 10.0))
+            fs = float(load_settings().get("font_scale", 1.25))
+            if fs > 0:
+                font_scale = max(0.6, min(3.0, fs))
+                updated = True
         except Exception:
-            pass
+            updated = False
+        if not updated:
+            try:
+                from tkinter import font as tkfont  # lazy import
+                f = tkfont.nametofont("TkDefaultFont")
+                current_raw = f.cget("size")
+                try:
+                    current = int(current_raw)
+                except Exception:
+                    # Some Tk variants return string; fallback parse
+                    current = int(str(current_raw).strip())
+                if current < 0:
+                    current = -current
+                font_scale = max(0.6, min(3.0, current / 10.0))
+            except Exception:
+                pass
         apply_matplotlib_style(font_scale)
         update_axes_fonts(ax, font_scale)
+        update_axes_fonts(ax2, font_scale)
+        # Use constrained_layout and a manual draw to recompute text layout
         try:
-            fig.tight_layout()
+            fig.set_constrained_layout(True)
         except Exception:
             pass
         canvas.draw_idle()
 
-    parent.bind("<<FontScaleChanged>>", on_font_scale_changed)
+    try:
+        parent.bind_all("<<FontScaleChanged>>", on_font_scale_changed)
+    except Exception:
+        parent.bind("<<FontScaleChanged>>", on_font_scale_changed)
 
     def normalize_date(date_str: str) -> str:
         s = (date_str or "").strip()
@@ -321,10 +378,11 @@ def build_charts_ui(parent: tk.Widget) -> None:
         ax2.set_ylabel("Ref", color="#ffffff")
         ax.text(0.5, 0.5, "No symbols", transform=ax.transAxes, ha="center", va="center", color="#cccccc")
         ax.grid(True, color="#333333", linestyle="--", linewidth=0.5)
+        apply_date_axis_format(ax)
         for spine in ax.spines.values():
-            spine.set_color("#666666")
+            spine.set_color("#ffffff")
         for spine in ax2.spines.values():
-            spine.set_color("#666666")
+            spine.set_color("#ffffff")
         canvas.draw_idle()
 
     def find_holding(symbol: str) -> Optional[Holding]:
@@ -448,10 +506,11 @@ def build_charts_ui(parent: tk.Widget) -> None:
             except Exception:
                 ax.legend(facecolor="#1e1e1e", edgecolor="#333333", labelcolor="#ffffff")
         ax.grid(True, color="#333333", linestyle="--", linewidth=0.5)
+        apply_date_axis_format(ax)
         for spine in ax.spines.values():
-            spine.set_color("#666666")
+            spine.set_color("#ffffff")
         for spine in ax2.spines.values():
-            spine.set_color("#666666")
+            spine.set_color("#ffffff")
         update_axes_fonts(ax, font_scale)
         update_axes_fonts(ax2, font_scale)
         canvas.draw_idle()
@@ -474,6 +533,11 @@ def build_charts_ui(parent: tk.Widget) -> None:
 
     # Initial load
     apply_matplotlib_style(font_scale)
+    # Sync initial font scale with current app scale
+    try:
+        on_font_scale_changed()
+    except Exception:
+        pass
     reload_portfolio()
 
     # Restore left/right pane divider position on first idle after layout

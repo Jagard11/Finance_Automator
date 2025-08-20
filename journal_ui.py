@@ -87,6 +87,10 @@ def build_journal_ui(parent: tk.Widget) -> None:
 		table_fg="#dddddd",
 		header_bg="#2b2b2b",
 		header_fg="#ffffff",
+		# Match row index (row numbers) styling to header to honor dark theme
+		index_bg="#2b2b2b",
+		index_fg="#ffffff",
+		index_border_fg="#333333",
 		top_left_bg="#2b2b2b",
 		header_border_fg="#333333",
 		table_grid_fg="#2a2a2a",
