@@ -64,9 +64,13 @@ def build_journal_ui(parent: tk.Widget) -> None:
     yscroll_tree = ttk.Scrollbar(container, orient="vertical", command=tree.yview)
     xscroll_tree = ttk.Scrollbar(container, orient="horizontal", command=tree.xview)
     tree.configure(yscrollcommand=yscroll_tree.set, xscrollcommand=xscroll_tree.set)
-    tree.pack(side="left", fill="both", expand=True)
-    yscroll_tree.pack(side="right", fill="y")
-    xscroll_tree.pack(side="bottom", fill="x")
+
+    # Use grid to ensure scrollbars are always visible and properly laid out
+    container.grid_rowconfigure(0, weight=1)
+    container.grid_columnconfigure(0, weight=1)
+    tree.grid(row=0, column=0, sticky="nsew")
+    yscroll_tree.grid(row=0, column=1, sticky="ns")
+    xscroll_tree.grid(row=1, column=0, sticky="ew")
 
     journal_path = journal_csv_path()
     last_mtime = os.path.getmtime(journal_path) if os.path.exists(journal_path) else 0.0
@@ -113,13 +117,13 @@ def build_journal_ui(parent: tk.Widget) -> None:
             show_status("No journal data available yet.", spinning=False)
             return
         symbols = list(df.columns)
-        # Configure tree columns: date + symbols
+        # Configure tree columns: date + symbols (centered)
         columns = ["date"] + symbols
         tree["columns"] = columns
         # Headings
         for col in columns:
-            tree.heading(col, text=col)
-            tree.column(col, width=100, anchor="w")
+            tree.heading(col, text=col, anchor="center")
+            tree.column(col, width=100, anchor="center")
 
         # Body rendered in chunks to avoid stalls
         rows = list(df.index)
