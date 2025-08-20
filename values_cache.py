@@ -117,8 +117,8 @@ def compute_and_write_values_for_holding(holding: Holding, start_iso: str, end_i
         # Align event to the first index at or after the event date
         pos = changes.index.searchsorted(ts, side="left")
         if pos >= len(changes.index):
-            # Event after last known price; skip
-            continue
+            # Event after last known price; align to the last known index
+            pos = len(changes.index) - 1
         if ev.type == EventType.PURCHASE:
             changes.iloc[pos] += float(ev.shares or 0.0)
         elif ev.type == EventType.SALE:

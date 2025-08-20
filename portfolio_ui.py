@@ -59,6 +59,10 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
         portfolio_name_var.set(portfolio.name)
         reinvest_var.set(portfolio.dividend_reinvest)
         refresh_holdings_list()
+        try:
+            parent.event_generate("<<PortfolioChanged>>", when="tail")
+        except Exception:
+            pass
 
     ttk.Button(top_frame, text="Switch", command=on_switch_portfolio).pack(side="left", padx=(0, 8))
 
@@ -106,7 +110,7 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     events_tree.heading("type", text="Type")
     events_tree.heading("shares", text="Shares")
     events_tree.heading("price", text="Price")
-    events_tree.heading("amount", text="Amount")
+    events_tree.heading("amount", text="Cost")
     events_tree.heading("note", text="Note")
 
     # Initial column widths (will be auto-adjusted on font scale changes)
@@ -124,7 +128,7 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     placeholder_type = "purchase"
     placeholder_shares = "shares"
     placeholder_price = "price"
-    placeholder_amount = "amount"
+    placeholder_amount = "cost"
     placeholder_note = "--- New Entry ---"
 
     new_entry_values = {
@@ -345,8 +349,13 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
                 target.events.append(ev)
                 mark_symbol_dirty(target.symbol)
                 try:
+                    storage.save_portfolio(portfolio)
+                except Exception:
+                    pass
+                try:
                     q = get_task_queue()
                     if q is not None:
+                        q.put_nowait({"type": "prefetch_symbol", "symbol": target.symbol})
                         q.put_nowait({"type": "warm_values"})
                 except Exception:
                     pass
@@ -362,6 +371,10 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
                     "note": "",
                 }
                 refresh_holdings_list()
+                try:
+                    parent.event_generate("<<PortfolioChanged>>", when="tail")
+                except Exception:
+                    pass
             return
 
         # Existing row update or move
@@ -406,6 +419,14 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             except Exception:
                 pass
             refresh_holdings_list()
+            try:
+                storage.save_portfolio(portfolio)
+            except Exception:
+                pass
+            try:
+                parent.event_generate("<<PortfolioChanged>>", when="tail")
+            except Exception:
+                pass
             return
 
         # Mark dirty for any edit
@@ -428,6 +449,10 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             q = get_task_queue()
             if q is not None:
                 q.put_nowait({"type": "warm_values"})
+        except Exception:
+            pass
+        try:
+            storage.save_portfolio(portfolio)
         except Exception:
             pass
 
@@ -577,6 +602,14 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
                     q.put_nowait({"type": "warm_values"})
             except Exception:
                 pass
+            try:
+                storage.save_portfolio(portfolio)
+            except Exception:
+                pass
+            try:
+                parent.event_generate("<<PortfolioChanged>>", when="tail")
+            except Exception:
+                pass
 
     def on_holdings_double_click(evt) -> None:  # noqa: ANN001
         nonlocal selected_holding_symbol
@@ -597,10 +630,34 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
         if portfolio.get_holding(sym):
             messagebox.showinfo("Already exists", f"{sym} is already in the portfolio.")
             return
-        portfolio.ensure_holding(sym)
+        # Ensure holding exists and persist a placeholder 0-share event so other tabs/processes see it
+        holding = portfolio.ensure_holding(sym)
+        try:
+            placeholder_date = datetime.today().date().isoformat()
+        except Exception:
+            placeholder_date = ""
+        try:
+            holding.events.append(Event(date=placeholder_date, type=EventType.PURCHASE, shares=0.0, price=0.0, amount=0.0, note=""))
+        except Exception:
+            pass
         selected_holding_symbol = sym
         mark_symbol_dirty(sym)
         refresh_holdings_list()
+        try:
+            storage.save_portfolio(portfolio)
+        except Exception:
+            pass
+        try:
+            q = get_task_queue()
+            if q is not None:
+                q.put_nowait({"type": "prefetch_symbol", "symbol": sym})
+                q.put_nowait({"type": "warm_values"})
+        except Exception:
+            pass
+        try:
+            parent.event_generate("<<PortfolioChanged>>", when="tail")
+        except Exception:
+            pass
 
     def poll_for_changes() -> None:
         nonlocal last_mtime, portfolio, selected_holding_symbol

@@ -365,18 +365,20 @@ def build_summary_ui(parent: tk.Widget) -> None:
         tree.heading(col, text=tree.heading(col, option="text"), command=lambda c=col: on_sort(c))
 
     def reload_and_refresh() -> None:
-        nonlocal portfolio, last_price_cache, last_mtime, portfolio_path
+        nonlocal portfolio, last_price_cache, day_prices_cache, last_mtime, portfolio_path
+        # Always resolve current default path in case it was swapped
+        portfolio_path = storage.default_portfolio_path()
         # Only reload from disk if file changed to avoid thrashing caches
         try:
             m = os.path.getmtime(portfolio_path) if os.path.exists(portfolio_path) else 0.0
         except Exception:
             m = last_mtime
-        # Always resolve current default path in case it was swapped
-        portfolio_path = storage.default_portfolio_path()
         if m > last_mtime:
             last_mtime = m
             portfolio = storage.load_portfolio()
-        # Preserve last_price_cache across refreshes so we don't re-read CSVs unnecessarily
+        # Invalidate caches so newly downloaded data is reflected immediately
+        last_price_cache = {}
+        day_prices_cache = {}
         recompute_and_fill()
         try:
             active_file_var.set(os.path.basename(portfolio_path))
@@ -388,6 +390,12 @@ def build_summary_ui(parent: tk.Widget) -> None:
 
     # Expose refresh hook for tab change
     setattr(parent, "_summary_refresh", reload_and_refresh)
+
+    # Also refresh when portfolio changes from other tabs
+    try:
+        parent.bind_all("<<PortfolioChanged>>", lambda _e: reload_and_refresh())
+    except Exception:
+        pass
 
 
 def register_summary_tab_handlers(notebook: ttk.Notebook, summary_frame: tk.Widget) -> None:

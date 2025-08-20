@@ -125,6 +125,16 @@ def _run_all(progress_q: Optional[mp.Queue] = None, task_q: Optional[mp.Queue] =
                 send({"type": "journal:rebuilt", "path": p})
             if total_updated:
                 send({"type": "values:done", "updated": total_updated})
+                # Touch portfolio file mtime to signal UI reloads if needed
+                try:
+                    for p in paths:
+                        try:
+                            with open(p, "a", encoding="utf-8") as _f:
+                                _f.write("")
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
             continue
         if ttype == "ingest_dividends":
             path = task.get("path")
@@ -145,6 +155,15 @@ def _run_all(progress_q: Optional[mp.Queue] = None, task_q: Optional[mp.Queue] =
                 send({"type": "journal:rebuilt", "path": p})
             if total_added:
                 send({"type": "dividends:done", "added": total_added})
+                try:
+                    for p in paths:
+                        try:
+                            with open(p, "a", encoding="utf-8") as _f:
+                                _f.write("")
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
             continue
         if ttype == "prefetch_symbol":
             sym = str(task.get("symbol", "")).strip().upper()

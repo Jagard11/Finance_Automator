@@ -170,22 +170,57 @@ def build_charts_ui(parent: tk.Widget) -> None:
         refresh_symbols()
 
     def compute_date_range(holding: Holding) -> tuple[str, str]:
+        # Derive a sensible window. Ignore placeholder/zero-value events.
+        today_iso = date.today().isoformat()
         if not holding.events:
-            today_str = date.today().isoformat()
-            return today_str, today_str
-        # Start at first event date
-        start = min(normalize_date(e.date) for e in holding.events)
+            # No events: show last 1 year by default
+            start_iso = (date.fromisoformat(today_iso) - timedelta(days=365)).isoformat()
+            return start_iso, today_iso
+        # Filter out events that carry no effect (shares==0, price==0, amount==0)
+        meaningful_dates: List[str] = []
+        for ev in holding.events:
+            try:
+                if not ev.date:
+                    continue
+                has_effect = False
+                try:
+                    if float(getattr(ev, "shares", 0.0) or 0.0) != 0.0:
+                        has_effect = True
+                except Exception:
+                    pass
+                try:
+                    if float(getattr(ev, "price", 0.0) or 0.0) != 0.0:
+                        has_effect = True
+                except Exception:
+                    pass
+                try:
+                    if float(getattr(ev, "amount", 0.0) or 0.0) != 0.0:
+                        has_effect = True
+                except Exception:
+                    pass
+                if has_effect:
+                    meaningful_dates.append(normalize_date(ev.date))
+            except Exception:
+                continue
+        if not meaningful_dates:
+            # Only placeholders present: default to 1y window
+            start_iso = (date.fromisoformat(today_iso) - timedelta(days=365)).isoformat()
+            return start_iso, today_iso
+        start = min(meaningful_dates)
         # End at last event date when position goes flat; else today
         shares = 0.0
         last_flat: Optional[str] = None
         for ev in sorted(holding.events, key=lambda e: normalize_date(e.date)):
-            if ev.type.value == "purchase":
-                shares += ev.shares
-            elif ev.type.value == "sale":
-                shares -= ev.shares
-            if abs(shares) < 1e-9:
-                last_flat = normalize_date(ev.date)
-        end = last_flat or date.today().isoformat()
+            try:
+                if ev.type.value == "purchase":
+                    shares += float(getattr(ev, "shares", 0.0) or 0.0)
+                elif ev.type.value == "sale":
+                    shares -= float(getattr(ev, "shares", 0.0) or 0.0)
+                if abs(shares) < 1e-9:
+                    last_flat = normalize_date(ev.date)
+            except Exception:
+                continue
+        end = last_flat or today_iso
         return start, end
 
     def compute_holding_return(holding: Holding) -> Optional[float]:
@@ -326,7 +361,22 @@ def build_charts_ui(parent: tk.Widget) -> None:
                     vprint(f"charts: derived price rows={len(price)} for {symbol}")
                     if not price.empty:
                         ax.plot(price.index, price.values, label=f"{symbol} (derived)", color="#0a84ff")
-                        ax.legend(facecolor="#1e1e1e", edgecolor="#333333", labelcolor="#ffffff")
+                        # Also attempt reference series if enabled
+                        if ref_enable_var.get() and ref_var.get().strip():
+                            ref_sym = ref_var.get().strip().upper()
+                            try:
+                                ref_df = fetch_price_history(ref_sym, start, end_plus, avoid_network=True)
+                            except Exception:
+                                ref_df = None
+                            if ref_df is not None and not ref_df.empty:
+                                ref_series = ref_df["Close"] if "Close" in ref_df.columns else (ref_df["Adj Close"] if "Adj Close" in ref_df.columns else ref_df.iloc[:, 0])
+                                ax2.plot(ref_series.index, ref_series.values, label=ref_sym, color="#ff9f0a")
+                        try:
+                            lines, labels = ax.get_legend_handles_labels()
+                            lines2, labels2 = ax2.get_legend_handles_labels()
+                            leg = ax.legend(lines + lines2, labels + labels2, facecolor="#1e1e1e", edgecolor="#333333", labelcolor="#ffffff")
+                        except Exception:
+                            ax.legend(facecolor="#1e1e1e", edgecolor="#333333", labelcolor="#ffffff")
                     else:
                         ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center", color="#cccccc")
                 except Exception:
@@ -336,6 +386,14 @@ def build_charts_ui(parent: tk.Widget) -> None:
         else:
             # Handle either Close, Adj Close, or first column
             series = df["Close"] if "Close" in df.columns else (df["Adj Close"] if "Adj Close" in df.columns else df.iloc[:, 0])
+            try:
+                # Ensure DatetimeIndex and tz-naive for safety
+                idx = pd.to_datetime(series.index, errors="coerce")
+                idx = idx.tz_localize(None) if hasattr(idx, "tz_localize") else idx
+                mask = ~idx.isna()
+                series = pd.Series(series.values[mask], index=idx[mask])
+            except Exception:
+                pass
             ax.plot(series.index, series.values, label=symbol, color="#0a84ff")
             # Plot reference if enabled
             if ref_enable_var.get() and ref_var.get().strip():
@@ -346,6 +404,13 @@ def build_charts_ui(parent: tk.Widget) -> None:
                     ref_df = None
                 if ref_df is not None and not ref_df.empty:
                     ref_series = ref_df["Close"] if "Close" in ref_df.columns else (ref_df["Adj Close"] if "Adj Close" in ref_df.columns else ref_df.iloc[:, 0])
+                    try:
+                        ridx = pd.to_datetime(ref_series.index, errors="coerce")
+                        ridx = ridx.tz_localize(None) if hasattr(ridx, "tz_localize") else ridx
+                        rmask = ~ridx.isna()
+                        ref_series = pd.Series(ref_series.values[rmask], index=ridx[rmask])
+                    except Exception:
+                        pass
                     ax2.plot(ref_series.index, ref_series.values, label=ref_sym, color="#ff9f0a")
             # Legends: combine from both axes
             try:
@@ -372,6 +437,12 @@ def build_charts_ui(parent: tk.Widget) -> None:
 
     # Expose a hook on the parent so external code can trigger a refresh/plot
     setattr(parent, "_charts_refresh_and_plot", lambda: (reload_portfolio(),))
+
+    # Global notification when portfolio changes (e.g., symbol added in Portfolio tab)
+    try:
+        parent.bind_all("<<PortfolioChanged>>", lambda _e: reload_portfolio())
+    except Exception:
+        pass
 
 
 def register_charts_tab_handlers(notebook: ttk.Notebook, charts_frame: tk.Widget) -> None:
