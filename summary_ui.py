@@ -87,17 +87,19 @@ def build_summary_ui(parent: tk.Widget) -> None:
 
     leftcol = ttk.Frame(metrics)
     leftcol.pack(side="left", padx=(0, 16))
-    total_value_label = tk.Label(leftcol, text="Profit: $-", font=big_font, fg="#2ecc71", padx=8)
+    total_value_label = tk.Label(leftcol, text="$- (All Time)", font=big_font, fg="#2ecc71", padx=8)
     total_value_label.pack(anchor="w")
-    day_profit_big = tk.Label(leftcol, text="Day Profit: $-", font=big_font, fg="#cccccc", padx=8)
+    day_profit_big = tk.Label(leftcol, text="$- (Today)", font=big_font, fg="#cccccc", padx=8)
     day_profit_big.pack(anchor="w")
 
     roi_subtext = tk.Label(metrics, text="ROI: -", padx=4)
     roi_subtext.pack(side="left", padx=(0, 8))
+    # Promote Total to big font and position it to the left of the big performance values
+    total_value_subtext = tk.Label(metrics, text="Total: -", padx=4)
+    total_value_subtext.configure(font=big_font)
+    total_value_subtext.pack(side="left", padx=(0, 16), before=leftcol)
     day_gain_pct_header = tk.Label(metrics, text="Day %: -", padx=4)
     day_gain_pct_header.pack(side="left", padx=(0, 8))
-    total_value_subtext = tk.Label(metrics, text="Total: -", padx=4)
-    total_value_subtext.pack(side="left", padx=(0, 16))
 
     ttk.Label(metrics, textvariable=lbl_total_cost).pack(side="left", padx=(0, 16))
     ttk.Label(metrics, textvariable=lbl_dividends).pack(side="left", padx=(0, 16))
@@ -373,7 +375,13 @@ def build_summary_ui(parent: tk.Widget) -> None:
         # Profit (includes dividends)
         profit_total = total_value + total_div - total_cost
         color = "#2ecc71" if profit_total >= 0 else "#e74c3c"
-        total_value_label.config(text=f"Profit: ${math.ceil(profit_total):,}", fg=color)
+        # Format as +/-$#,### (All Time)
+        try:
+            sign_all = "+" if profit_total > 0 else ("-" if profit_total < 0 else "")
+            all_time_txt = f"{sign_all}${abs(profit_total):,.0f} (All Time)"
+        except Exception:
+            all_time_txt = "$- (All Time)"
+        total_value_label.config(text=all_time_txt, fg=color)
         roi_subtext.config(text=("ROI: -" if overall_roi is None else f"ROI: {overall_roi*100:.2f}%"))
         total_value_subtext.config(text=f"Total: ${math.ceil(total_value):,}")
         lbl_total_cost.set(f"Cost: ${math.ceil(total_cost):,}")
@@ -384,10 +392,16 @@ def build_summary_ui(parent: tk.Widget) -> None:
         if portfolio_prev_value_total > 0:
             day_color = "#2ecc71" if portfolio_day_gain_total >= 0 else "#e74c3c"
             day_gain_pct_port = portfolio_day_gain_total / portfolio_prev_value_total
-            day_profit_big.config(text=f"Day Profit: ${math.ceil(portfolio_day_gain_total):,}", fg=day_color)
+            # Format as +/-$#,###.## (Today)
+            try:
+                sign_day = "+" if portfolio_day_gain_total > 0 else ("-" if portfolio_day_gain_total < 0 else "")
+                day_txt = f"{sign_day}${abs(portfolio_day_gain_total):,.2f} (Today)"
+            except Exception:
+                day_txt = "$- (Today)"
+            day_profit_big.config(text=day_txt, fg=day_color)
             day_gain_pct_header.config(text=f"Day %: {day_gain_pct_port*100:.2f}%", fg=day_color)
         else:
-            day_profit_big.config(text="Day Profit: -", fg=day_color)
+            day_profit_big.config(text="- (Today)", fg=day_color)
             day_gain_pct_header.config(text="Day %: -", fg=day_color)
 
         auto_size_columns()
