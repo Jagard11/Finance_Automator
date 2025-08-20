@@ -17,38 +17,12 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     top_frame = ttk.Frame(parent)
     top_frame.pack(fill="x", padx=8, pady=8)
 
-    name_label = ttk.Label(top_frame, text="Portfolio:")
-    name_label.pack(side="left")
+    ttk.Label(top_frame, text="Portfolio:").pack(side="left")
     portfolio_name_var = tk.StringVar(value=portfolio.name)
-    name_entry = ttk.Entry(top_frame, textvariable=portfolio_name_var, width=30)
-    name_entry.pack(side="left", padx=(4, 16))
+    ttk.Entry(top_frame, textvariable=portfolio_name_var, width=30).pack(side="left", padx=(4, 16))
 
     reinvest_var = tk.BooleanVar(value=portfolio.dividend_reinvest)
-    reinvest_check = ttk.Checkbutton(top_frame, text="Dividend Reinvest", variable=reinvest_var)
-    reinvest_check.pack(side="left")
-
-    # Add holding
-    add_frame = ttk.LabelFrame(parent, text="Add Holding")
-    add_frame.pack(fill="x", padx=8, pady=8)
-
-    symbol_var = tk.StringVar()
-    ttk.Label(add_frame, text="Symbol:").pack(side="left", padx=(8, 4))
-    symbol_entry = ttk.Entry(add_frame, textvariable=symbol_var, width=12)
-    symbol_entry.pack(side="left")
-
-    def on_add_symbol() -> None:
-        nonlocal selected_holding_symbol
-        symbol = symbol_var.get().strip().upper()
-        if not symbol:
-            return
-        holding = portfolio.get_holding(symbol)
-        if holding is None:
-            portfolio.ensure_holding(symbol)
-        selected_holding_symbol = symbol
-        refresh_holdings_list()
-        symbol_var.set("")
-
-    ttk.Button(add_frame, text="Add", command=on_add_symbol).pack(side="left", padx=8)
+    ttk.Checkbutton(top_frame, text="Dividend Reinvest", variable=reinvest_var).pack(side="left")
 
     # Split panes: holdings list and events
     main_pane = ttk.PanedWindow(parent, orient=tk.HORIZONTAL)
@@ -70,10 +44,11 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     ttk.Label(right_frame, text="Events").pack(anchor="w")
 
     # Sortable table for events
-    columns = ("date", "type", "shares", "price", "amount", "note")
+    columns = ("symbol", "date", "type", "shares", "price", "amount", "note")
     events_tree = ttk.Treeview(right_frame, columns=columns, show="headings", selectmode="browse")
     events_tree.pack(fill="both", expand=True)
 
+    events_tree.heading("symbol", text="Symbol")
     events_tree.heading("date", text="Date")
     events_tree.heading("type", text="Type")
     events_tree.heading("shares", text="Shares")
@@ -81,6 +56,7 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     events_tree.heading("amount", text="Amount")
     events_tree.heading("note", text="Note")
 
+    events_tree.column("symbol", width=100, anchor="w")
     events_tree.column("date", width=120, anchor="w")
     events_tree.column("type", width=110, anchor="w")
     events_tree.column("shares", width=90, anchor="e")
@@ -88,50 +64,27 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     events_tree.column("amount", width=90, anchor="e")
     events_tree.column("note", width=300, anchor="w")
 
-    # Add/Edit event form
-    form = ttk.LabelFrame(right_frame, text="Add / Edit Event")
-    form.pack(fill="x", pady=8)
+    # Placeholders for new row prompts
+    placeholder_symbol = "Enter symbol"
+    placeholder_date = "YYYY-MM-DD"
+    placeholder_type = "purchase"
+    placeholder_shares = "shares"
+    placeholder_price = "price"
+    placeholder_amount = "amount"
+    placeholder_note = "--- New Entry ---"
 
-    date_var = tk.StringVar()
-    type_var = tk.StringVar(value=EventType.PURCHASE.value)
-    shares_var = tk.StringVar()
-    price_var = tk.StringVar()
-    amount_var = tk.StringVar()
-    note_var = tk.StringVar()
+    # Draft buffer for the new row (do not create event until sufficient info exists)
+    new_entry_values = {
+        "symbol": "",
+        "date": "",
+        "type": placeholder_type,
+        "shares": "",
+        "price": "",
+        "amount": "",
+        "note": "",
+    }
 
-    row = ttk.Frame(form)
-    row.pack(fill="x", padx=8, pady=4)
-    ttk.Label(row, text="Date (YYYY-MM-DD or YYYYMMDD)").pack(side="left")
-    ttk.Entry(row, textvariable=date_var, width=18).pack(side="left", padx=8)
-
-    ttk.Label(row, text="Type").pack(side="left")
-    type_combo = ttk.Combobox(row, textvariable=type_var, width=16, state="readonly",
-                              values=[
-                                  EventType.PURCHASE.value,
-                                  EventType.SALE.value,
-                                  EventType.DIVIDEND.value,
-                                  EventType.CASH_DEPOSIT.value,
-                                  EventType.CASH_WITHDRAWAL.value,
-                              ])
-    type_combo.pack(side="left", padx=8)
-
-    row2 = ttk.Frame(form)
-    row2.pack(fill="x", padx=8, pady=4)
-    ttk.Label(row2, text="Shares").pack(side="left")
-    ttk.Entry(row2, textvariable=shares_var, width=10).pack(side="left", padx=8)
-    ttk.Label(row2, text="Price").pack(side="left")
-    ttk.Entry(row2, textvariable=price_var, width=10).pack(side="left", padx=8)
-    ttk.Label(row2, text="Amount").pack(side="left")
-    ttk.Entry(row2, textvariable=amount_var, width=12).pack(side="left", padx=8)
-
-    row3 = ttk.Frame(form)
-    row3.pack(fill="x", padx=8, pady=4)
-    ttk.Label(row3, text="Note").pack(side="left")
-    ttk.Entry(row3, textvariable=note_var).pack(side="left", fill="x", expand=True, padx=8)
-
-    # Track selection (original index in holding.events)
-    selected_event_idx: Optional[int] = None
-
+    # Helpers: date parsing/formatting and sorting
     def parse_date_for_sorting(date_str: str) -> tuple[int, int, int]:
         s = (date_str or "").strip()
         for fmt in ("%Y-%m-%d", "%Y%m%d"):
@@ -140,7 +93,6 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
                 return (dt.year, dt.month, dt.day)
             except ValueError:
                 continue
-        # Fallback: place unparsable dates at the end preserving relative order
         return (9999, 12, 31)
 
     def format_date_for_display(date_str: str) -> str:
@@ -168,7 +120,9 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             return None
         return portfolio.get_holding(symbol)
 
-    def get_field_value(ev: Event, col: str):
+    def get_field_value(ev: Event, col: str, symbol: str):
+        if col == "symbol":
+            return symbol
         if col == "date":
             return parse_date_for_sorting(ev.date)
         if col == "type":
@@ -183,14 +137,12 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             return (ev.note or "").lower()
         return ""
 
-    def build_sort_tuple(ev: Event, original_idx: int):
-        # Primary column first, then all others as tie-breakers, then original index
+    def build_sort_tuple(ev: Event, symbol: str, original_idx: int):
         ordered_cols = [events_sort_column] + [c for c in columns if c != events_sort_column]
-        values = tuple(get_field_value(ev, c) for c in ordered_cols)
+        values = tuple(get_field_value(ev, c, symbol) for c in ordered_cols)
         return values + (original_idx,)
 
     def refresh_holdings_list() -> None:
-        # Preserve selection if possible
         nonlocal selected_holding_symbol
         current_symbol = selected_holding_symbol
         holdings_list.delete(0, tk.END)
@@ -210,137 +162,234 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
         refresh_events_list()
         refresh_symbols_label()
 
-    def refresh_events_list() -> None:
-        nonlocal selected_event_idx
-        # Remember previously selected row id
-        prev_selected = None
-        sel = events_tree.selection()
-        if sel:
-            prev_selected = sel[0]
-        # Clear tree
-        for iid in events_tree.get_children():
-            events_tree.delete(iid)
-        selected_event_idx = None
-        holding = get_selected_holding()
-        if holding is None:
+    # Inline cell editing state
+    edit_widget: Optional[tk.Widget] = None
+    edit_item: Optional[str] = None
+    edit_col: Optional[str] = None
+
+    def end_edit(save: bool) -> None:
+        nonlocal edit_widget, edit_item, edit_col, new_entry_values
+        if edit_widget is None:
             return
-        # Build sorted view without mutating underlying order; iid is original index
-        enumerated = list(enumerate(holding.events))
-        enumerated.sort(key=lambda pair: build_sort_tuple(pair[1], pair[0]), reverse=events_sort_reverse)
-        for original_idx, e in enumerated:
-            iid = str(original_idx)
-            events_tree.insert("", "end", iid=iid, values=(
-                format_date_for_display(e.date),
-                e.type.value,
-                f"{e.shares:g}" if e.shares else "",
-                f"{e.price:g}" if e.price else "",
-                f"{e.amount:g}" if e.amount else "",
-                e.note,
+        widget = edit_widget
+        item = edit_item
+        col = edit_col
+        value = None
+        if save and isinstance(widget, (tk.Entry, ttk.Entry)):
+            value = widget.get()
+        elif save and isinstance(widget, ttk.Combobox):
+            value = widget.get()
+        widget.destroy()
+        edit_widget = None
+        edit_item = None
+        edit_col = None
+
+        if not save or item is None or col is None:
+            return
+
+        def parse_event_type(s: str) -> EventType:
+            s_norm = (s or "").strip().lower()
+            for et in [EventType.PURCHASE, EventType.SALE, EventType.DIVIDEND, EventType.CASH_DEPOSIT, EventType.CASH_WITHDRAWAL]:
+                if s_norm == et.value:
+                    return et
+            aliases = {
+                "buy": EventType.PURCHASE,
+                "sell": EventType.SALE,
+                "div": EventType.DIVIDEND,
+                "deposit": EventType.CASH_DEPOSIT,
+                "withdraw": EventType.CASH_WITHDRAWAL,
+                "withdrawal": EventType.CASH_WITHDRAWAL,
+            }
+            return aliases.get(s_norm, EventType.PURCHASE)
+
+        # Handle new row: update draft values and commit only when symbol + another field exist
+        if item == "new":
+            # Update draft
+            if col == "symbol":
+                new_entry_values["symbol"] = (value or "").strip().upper().replace(" ", "")
+            elif col == "date":
+                v = (value or "").strip()
+                new_entry_values["date"] = "" if v == placeholder_date else v
+            elif col == "type":
+                v = (value or "").strip().lower()
+                new_entry_values["type"] = placeholder_type if not v else v
+            elif col == "shares":
+                v = (value or "").strip()
+                new_entry_values["shares"] = "" if v == placeholder_shares else v
+            elif col == "price":
+                v = (value or "").strip()
+                new_entry_values["price"] = "" if v == placeholder_price else v
+            elif col == "amount":
+                v = (value or "").strip()
+                new_entry_values["amount"] = "" if v == placeholder_amount else v
+            elif col == "note":
+                v = (value or "").strip()
+                new_entry_values["note"] = "" if v == placeholder_note else v
+
+            # Update display for the new row
+            events_tree.item("new", values=(
+                new_entry_values["symbol"] or placeholder_symbol,
+                new_entry_values["date"] or placeholder_date,
+                new_entry_values["type"] or placeholder_type,
+                new_entry_values["shares"] or placeholder_shares,
+                new_entry_values["price"] or placeholder_price,
+                new_entry_values["amount"] or placeholder_amount,
+                new_entry_values["note"] or placeholder_note,
             ))
-        # Restore selection if possible
-        if prev_selected and prev_selected in events_tree.get_children():
-            events_tree.selection_set(prev_selected)
-            selected_event_idx = int(prev_selected)
 
-    def populate_form_from_event(ev: Event) -> None:
-        date_var.set(ev.date)
-        type_var.set(ev.type.value)
-        shares_var.set(str(ev.shares if ev.shares else ""))
-        price_var.set(str(ev.price if ev.price else ""))
-        amount_var.set(str(ev.amount if ev.amount else ""))
-        note_var.set(ev.note)
+            has_symbol = bool(new_entry_values["symbol"])
+            has_other = bool(new_entry_values["date"] or new_entry_values["shares"] or new_entry_values["price"] or new_entry_values["amount"] or new_entry_values["note"] or (new_entry_values["type"] and new_entry_values["type"] != placeholder_type))
+            if has_symbol and has_other:
+                # Commit event to the entered or existing holding
+                target = portfolio.ensure_holding(new_entry_values["symbol"]) if new_entry_values["symbol"] else get_selected_holding()
+                if target is None:
+                    messagebox.showwarning("Missing symbol", "Enter a Symbol in the new row first.")
+                    return
+                # Build event
+                try:
+                    shares_v = float(new_entry_values["shares"]) if new_entry_values["shares"] else 0.0
+                except ValueError:
+                    shares_v = 0.0
+                try:
+                    price_v = float(new_entry_values["price"]) if new_entry_values["price"] else 0.0
+                except ValueError:
+                    price_v = 0.0
+                try:
+                    amount_v = float(new_entry_values["amount"]) if new_entry_values["amount"] else 0.0
+                except ValueError:
+                    amount_v = 0.0
 
-    def on_select_event(_evt=None) -> None:  # noqa: ANN001
-        nonlocal selected_event_idx
-        sel = events_tree.selection()
-        if not sel:
-            selected_event_idx = None
-            return
-        try:
-            idx = int(sel[0])
-        except ValueError:
-            selected_event_idx = None
-            return
-        selected_event_idx = idx
-        holding = get_selected_holding()
-        if holding is None:
-            return
-        if 0 <= idx < len(holding.events):
-            populate_form_from_event(holding.events[idx])
+                ev = Event(
+                    date=new_entry_values["date"],
+                    type=parse_event_type(new_entry_values["type"] or placeholder_type),
+                    shares=shares_v,
+                    price=price_v,
+                    amount=amount_v,
+                    note=new_entry_values["note"],
+                )
+                target.events.append(ev)
 
-    def parse_form_to_values() -> tuple[str, EventType, float, float, float, str]:
-        try:
-            shares = float(shares_var.get() or 0)
-        except ValueError:
-            shares = 0.0
-        try:
-            price = float(price_var.get() or 0)
-        except ValueError:
-            price = 0.0
-        try:
-            amount = float(amount_var.get() or 0)
-        except ValueError:
-            amount = 0.0
-        return (
-            date_var.get().strip(),
-            EventType(type_var.get()),
-            shares,
-            price,
-            amount,
-            note_var.get().strip(),
-        )
-
-    def on_add_event() -> None:
-        holding = get_selected_holding()
-        if holding is None and type_var.get() not in {EventType.CASH_DEPOSIT.value, EventType.CASH_WITHDRAWAL.value, EventType.DIVIDEND.value}:
-            messagebox.showwarning("No holding selected", "Select a holding to add a trade event.")
+                # Reset draft and refresh
+                new_entry_values = {
+                    "symbol": "",
+                    "date": "",
+                    "type": placeholder_type,
+                    "shares": "",
+                    "price": "",
+                    "amount": "",
+                    "note": "",
+                }
+                refresh_holdings_list()
             return
-        date_str, ev_type, shares, price, amount, note = parse_form_to_values()
-        ev = Event(date=date_str, type=ev_type, shares=shares, price=price, amount=amount, note=note)
-        if ev.type in {EventType.CASH_DEPOSIT, EventType.CASH_WITHDRAWAL, EventType.DIVIDEND}:
-            portfolio.cash_events.append(ev)
+
+        # Existing row update or move
+        # Determine current holding and event index from item id
+        if ":" in item:
+            item_symbol, idx_str = item.split(":", 1)
+            try:
+                idx = int(idx_str)
+            except ValueError:
+                return
+            current_holding = portfolio.get_holding(item_symbol)
         else:
-            holding.events.append(ev)
-        refresh_events_list()
-        date_var.set("")
-        shares_var.set("")
-        price_var.set("")
-        amount_var.set("")
-        note_var.set("")
+            current_holding = get_selected_holding()
+            try:
+                idx = int(item)
+            except ValueError:
+                return
+        if current_holding is None or not (0 <= idx < len(current_holding.events)):
+            return
+        ev = current_holding.events[idx]
 
-    def on_update_event() -> None:
-        holding = get_selected_holding()
-        if holding is None:
-            messagebox.showwarning("No holding selected", "Select a holding first.")
+        def parse_float_or_zero(s: Optional[str]) -> float:
+            try:
+                return float(s or 0)
+            except ValueError:
+                return 0.0
+
+        if col == "symbol":
+            new_symbol = (value or "").strip().upper()
+            if not new_symbol or new_symbol == current_holding.symbol:
+                return
+            del current_holding.events[idx]
+            target_holding = portfolio.ensure_holding(new_symbol)
+            target_holding.events.append(ev)
+            refresh_holdings_list()
             return
-        if selected_event_idx is None or not (0 <= selected_event_idx < len(holding.events)):
-            messagebox.showwarning("No event selected", "Select an event to update.")
+
+        if col == "date":
+            ev.date = (value or "").strip()
+        elif col == "type":
+            ev.type = parse_event_type(value)
+        elif col == "shares":
+            ev.shares = parse_float_or_zero(value)
+        elif col == "price":
+            ev.price = parse_float_or_zero(value)
+        elif col == "amount":
+            ev.amount = parse_float_or_zero(value)
+        elif col == "note":
+            ev.note = value or ""
+        refresh_events_list()
+
+    def begin_edit(item: str, col_id: str) -> None:
+        nonlocal edit_widget, edit_item, edit_col
+        # Map tree column id like #1 -> column name
+        try:
+            col_index = int(col_id.replace("#", "")) - 1
+        except ValueError:
             return
-        date_str, ev_type, shares, price, amount, note = parse_form_to_values()
-        # If type becomes a cash-type, move to cash events
-        if ev_type in {EventType.CASH_DEPOSIT, EventType.CASH_WITHDRAWAL, EventType.DIVIDEND}:
-            del holding.events[selected_event_idx]
-            portfolio.cash_events.append(Event(date=date_str, type=ev_type, shares=shares, price=price, amount=amount, note=note))
+        if not (0 <= col_index < len(columns)):
+            return
+        col = columns[col_index]
+        # Place an editor over the cell
+        bbox = events_tree.bbox(item, col_id)
+        if not bbox:
+            return
+        x, y, w, h = bbox
+        current_value = ""
+        vals = events_tree.item(item, "values")
+        if vals and 0 <= col_index < len(vals):
+            current_value = vals[col_index]
+
+        if col == "type":
+            edit = ttk.Combobox(events_tree, state="normal", values=[
+                EventType.PURCHASE.value,
+                EventType.SALE.value,
+                EventType.DIVIDEND.value,
+                EventType.CASH_DEPOSIT.value,
+                EventType.CASH_WITHDRAWAL.value,
+            ])
+            edit.set(current_value)
         else:
-            ev = holding.events[selected_event_idx]
-            ev.date = date_str
-            ev.type = ev_type
-            ev.shares = shares
-            ev.price = price
-            ev.amount = amount
-            ev.note = note
-        refresh_events_list()
+            edit = ttk.Entry(events_tree)
+            edit.insert(0, current_value)
 
-    def on_delete_event() -> None:
-        holding = get_selected_holding()
-        if holding is None:
-            messagebox.showwarning("No holding selected", "Select a holding first.")
+        edit.place(x=x, y=y, width=w, height=h)
+        edit.focus_set()
+
+        def on_return(_evt=None):  # noqa: ANN001
+            end_edit(True)
+
+        def on_escape(_evt=None):  # noqa: ANN001
+            end_edit(False)
+
+        edit.bind("<Return>", on_return)
+        edit.bind("<Escape>", on_escape)
+        edit.bind("<FocusOut>", lambda _e: end_edit(True))
+
+        edit_widget = edit
+        edit_item = item
+        edit_col = col
+
+    def on_tree_double_click(evt) -> None:  # noqa: ANN001
+        region = events_tree.identify("region", evt.x, evt.y)
+        if region != "cell":
             return
-        if selected_event_idx is None or not (0 <= selected_event_idx < len(holding.events)):
-            messagebox.showwarning("No event selected", "Select an event to delete.")
+        item = events_tree.identify_row(evt.y)
+        col = events_tree.identify_column(evt.x)
+        if not item or not col:
             return
-        del holding.events[selected_event_idx]
-        refresh_events_list()
+        begin_edit(item, col)
 
     # Column header click sorting
     def on_sort(col: str) -> None:
@@ -355,16 +404,75 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     for col in columns:
         events_tree.heading(col, text=events_tree.heading(col, option="text"), command=lambda c=col: on_sort(c))
 
+    def refresh_events_list() -> None:
+        # Remember selection
+        prev_selected = None
+        sel = events_tree.selection()
+        if sel:
+            prev_selected = sel[0]
+        # Clear
+        for iid in events_tree.get_children():
+            events_tree.delete(iid)
+
+        # Build a view of events for selected holding only (to keep changes minimal)
+        holding = get_selected_holding()
+        if holding is not None:
+            enumerated = list(enumerate(holding.events))
+            enumerated.sort(key=lambda pair: build_sort_tuple(pair[1], holding.symbol, pair[0]), reverse=events_sort_reverse)
+            for original_idx, e in enumerated:
+                iid = f"{holding.symbol}:{original_idx}"
+                events_tree.insert("", "end", iid=iid, values=(
+                    holding.symbol,
+                    format_date_for_display(e.date),
+                    e.type.value,
+                    f"{e.shares:g}" if e.shares else "",
+                    f"{e.price:g}" if e.price else "",
+                    f"{e.amount:g}" if e.amount else "",
+                    e.note,
+                ))
+
+        # Always include a new event row for quick entry with placeholders or draft values
+        events_tree.insert("", "end", iid="new", values=(
+            new_entry_values["symbol"] or placeholder_symbol,
+            new_entry_values["date"] or placeholder_date,
+            new_entry_values["type"] or placeholder_type,
+            new_entry_values["shares"] or placeholder_shares,
+            new_entry_values["price"] or placeholder_price,
+            new_entry_values["amount"] or placeholder_amount,
+            new_entry_values["note"] or placeholder_note,
+        ))
+        # Restore selection if possible
+        if prev_selected and prev_selected in events_tree.get_children():
+            events_tree.selection_set(prev_selected)
+
     def on_select_holding(_evt=None) -> None:  # noqa: ANN001
-        nonlocal selected_holding_symbol
-        try:
-            idx = holdings_list.curselection()[0]
-            selected_holding_symbol = holdings_list.get(idx)
-        except IndexError:
-            selected_holding_symbol = selected_holding_symbol
         refresh_events_list()
 
-    events_tree.bind("<<TreeviewSelect>>", on_select_event)
+    def on_delete_key(_evt=None) -> None:  # noqa: ANN001
+        # Delete selected event
+        sel = events_tree.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        if iid == "new":
+            return
+        # Parse iid
+        if ":" not in iid:
+            return
+        sym, idx_str = iid.split(":", 1)
+        holding = portfolio.get_holding(sym)
+        if holding is None:
+            return
+        try:
+            idx = int(idx_str)
+        except ValueError:
+            return
+        if 0 <= idx < len(holding.events):
+            del holding.events[idx]
+            refresh_events_list()
+
+    events_tree.bind("<Double-1>", on_tree_double_click)
+    events_tree.bind("<Delete>", on_delete_key)
     holdings_list.bind("<<ListboxSelect>>", on_select_holding)
 
     # Save controls
@@ -372,8 +480,7 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     bottom.pack(fill="x", padx=8, pady=8)
 
     symbols_label_var = tk.StringVar(value="")
-    symbols_label = ttk.Label(bottom, textvariable=symbols_label_var)
-    symbols_label.pack(side="left")
+    ttk.Label(bottom, textvariable=symbols_label_var).pack(side="left")
 
     def refresh_symbols_label() -> None:
         symbols_label_var.set(f"Symbols: {', '.join(sorted([h.symbol for h in portfolio.holdings]))}")

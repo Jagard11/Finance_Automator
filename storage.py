@@ -31,9 +31,9 @@ def list_portfolio_paths() -> List[str]:
 
 
 CSV_FIELDS = [
-    "row_type",  # meta | event | cash
-    "key",       # used when row_type == meta (e.g., name, dividend_reinvest)
-    "value",     # used when row_type == meta
+    "row_type",  # event | cash  (meta supported for backward-compat read only)
+    "key",
+    "value",
     "symbol",
     "date",
     "type",
@@ -63,6 +63,7 @@ def load_portfolio(file_path: Optional[str] = None) -> Portfolio:
         for row in reader:
             row_type = (row.get("row_type") or "").strip().lower()
             if row_type == "meta":
+                # Backward compatibility only; no longer written out
                 key = (row.get("key") or "").strip().lower()
                 val = (row.get("value") or "").strip()
                 if key == "name":
@@ -109,16 +110,7 @@ def save_portfolio(portfolio: Portfolio, file_path: Optional[str] = None) -> Non
     with open(path, "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         writer.writeheader()
-        # Meta rows
-        writer.writerow({
-            "row_type": "meta", "key": "name", "value": portfolio.name,
-            "symbol": "", "date": "", "type": "", "shares": "", "price": "", "amount": "", "note": "",
-        })
-        writer.writerow({
-            "row_type": "meta", "key": "dividend_reinvest", "value": _bool_to_str(portfolio.dividend_reinvest),
-            "symbol": "", "date": "", "type": "", "shares": "", "price": "", "amount": "", "note": "",
-        })
-        # Holding events
+        # No meta rows; write only events
         for holding in portfolio.holdings:
             for ev in holding.events:
                 writer.writerow({
@@ -133,7 +125,6 @@ def save_portfolio(portfolio: Portfolio, file_path: Optional[str] = None) -> Non
                     "amount": ev.amount,
                     "note": ev.note,
                 })
-        # Cash events
         for ev in portfolio.cash_events:
             writer.writerow({
                 "row_type": "cash",
