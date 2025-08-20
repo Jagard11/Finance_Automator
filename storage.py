@@ -1,6 +1,6 @@
 import csv
 import os
-from typing import Optional
+from typing import Optional, List
 
 from models import Portfolio, Holding, Event, EventType
 
@@ -13,6 +13,21 @@ def default_data_dir() -> str:
 
 def default_portfolio_path() -> str:
     return os.path.join(default_data_dir(), "portfolio_default.csv")
+
+
+def list_portfolio_paths() -> List[str]:
+    data_dir = default_data_dir()
+    if not os.path.isdir(data_dir):
+        return []
+    paths: List[str] = []
+    for name in os.listdir(data_dir):
+        if not name.lower().endswith(".csv"):
+            continue
+        # Skip cache files if any end up here
+        if name.lower().startswith("cache_"):
+            continue
+        paths.append(os.path.join(data_dir, name))
+    return sorted(paths)
 
 
 CSV_FIELDS = [
