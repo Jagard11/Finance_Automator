@@ -4,6 +4,7 @@ from datetime import date, timedelta, datetime
 from typing import Dict, List, Optional, Tuple
 
 import os
+import math
 from models import Portfolio, Holding, EventType
 import storage
 from market_data import fetch_price_history
@@ -79,10 +80,12 @@ def build_summary_ui(parent: tk.Widget) -> None:
     big_font = base_font.copy()
     big_font.configure(size=int(base_font.cget("size")) + 10, weight="bold")
 
-    total_value_label = tk.Label(metrics, text="$-", font=big_font, fg="#cccccc", padx=8)
+    total_value_label = tk.Label(metrics, text="Profit: $-", font=big_font, fg="#2ecc71", padx=8)
     total_value_label.pack(side="left", padx=(0, 8))
     roi_subtext = tk.Label(metrics, text="ROI: -", padx=4)
-    roi_subtext.pack(side="left", padx=(0, 16))
+    roi_subtext.pack(side="left", padx=(0, 8))
+    total_value_subtext = tk.Label(metrics, text="Total: -", padx=4)
+    total_value_subtext.pack(side="left", padx=(0, 16))
 
     ttk.Label(metrics, textvariable=lbl_total_cost).pack(side="left", padx=(0, 16))
     ttk.Label(metrics, textvariable=lbl_dividends).pack(side="left", padx=(0, 16))
@@ -218,9 +221,9 @@ def build_summary_ui(parent: tk.Widget) -> None:
             tree.insert("", "end", iid=sym, values=(
                 sym,
                 f"{shares:g}",
-                ("-" if lp is None else f"{lp:.2f}"),
-                f"{value:.2f}",
-                f"{cost:.2f}",
+                ("-" if lp is None else f"${math.ceil(lp):,}"),
+                f"${math.ceil(value):,}",
+                f"${math.ceil(cost):,}",
                 ("-" if roi is None else f"{roi*100:.2f}%"),
                 start_dt,
                 last_dt,
@@ -229,14 +232,14 @@ def build_summary_ui(parent: tk.Widget) -> None:
         overall_roi = None
         if total_cost > 0:
             overall_roi = (total_value + total_div - total_cost) / total_cost
-        # Update big total value with color and ROI subtext
-        color = "#cccccc"
-        if overall_roi is not None:
-            color = "#2ecc71" if overall_roi >= 0 else "#e74c3c"
-        total_value_label.config(text=f"${total_value:,.0f}", fg=color)
+        # Profit (includes dividends)
+        profit_total = total_value + total_div - total_cost
+        color = "#2ecc71" if profit_total >= 0 else "#e74c3c"
+        total_value_label.config(text=f"Profit: ${math.ceil(profit_total):,}", fg=color)
         roi_subtext.config(text=("ROI: -" if overall_roi is None else f"ROI: {overall_roi*100:.2f}%"))
-        lbl_total_cost.set(f"Cost: {total_cost:,.0f}")
-        lbl_dividends.set(f"Dividends: {total_div:,.0f}")
+        total_value_subtext.config(text=f"Total: ${math.ceil(total_value):,}")
+        lbl_total_cost.set(f"Cost: ${math.ceil(total_cost):,}")
+        lbl_dividends.set(f"Dividends: ${math.ceil(total_div):,}")
 
         auto_size_columns()
 
