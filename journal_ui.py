@@ -128,8 +128,11 @@ def build_journal_ui(parent: tk.Widget) -> None:
 
         # Body rendered in chunks to avoid stalls
         rows = list(df.index)
-        # Pre-compute max index per symbol for ATH highlighting
+        # Pre-compute max index per symbol for ATH highlighting and stats
         max_idx: Dict[str, int] = {}
+        ath_val: Dict[str, float] = {}
+        last_val: Dict[str, float] = {}
+        ath_date: Dict[str, datetime] = {}
         for sym in symbols:
             try:
                 coln = pd.to_numeric(df[sym], errors="coerce")
@@ -138,6 +141,10 @@ def build_journal_ui(parent: tk.Widget) -> None:
                 max_label = coln.idxmax()
                 pos = int(df.index.get_indexer_for([max_label])[0])
                 max_idx[sym] = pos
+                ath_val[sym] = float(coln.max())
+                last_val[sym] = float(coln.ffill().iloc[-1])
+                # max_label is a date object already
+                ath_date[sym] = pd.to_datetime(max_label).to_pydatetime()
             except Exception:
                 continue
 
@@ -145,7 +152,6 @@ def build_journal_ui(parent: tk.Widget) -> None:
         try:
             tree.tag_configure("odd", background="#1b1b1b")
             tree.tag_configure("even", background="#232323")
-            tree.tag_configure("ath_row", font=highlight_font)
         except Exception:
             pass
         chunk = 200
@@ -157,10 +163,15 @@ def build_journal_ui(parent: tk.Widget) -> None:
             if my_seq != render_seq or not journal_active:
                 return
             end = min(start + chunk, len(rows))
+            def underline_text(s: str) -> str:
+                try:
+                    return "".join(ch + "\u0332" for ch in s)
+                except Exception:
+                    return s
+
             for i in range(start, end):
                 d = rows[i]
                 values: List[str] = [getattr(d, "isoformat", lambda: str(d))()]
-                row_has_ath = False
                 for sym in symbols:
                     val = df.at[d, sym]
                     if pd.isna(val):
@@ -173,13 +184,10 @@ def build_journal_ui(parent: tk.Widget) -> None:
                     except Exception:
                         text = str(val)
                     if max_idx.get(sym) == i:
-                        # Mark as ATH
-                        text = f"▲ {text}"
-                        row_has_ath = True
+                        # Mark as ATH (cell only) with marker and underline
+                        text = underline_text(f"▲ {text}")
                     values.append(text)
                 tags = ["odd" if (i % 2) else "even"]
-                if row_has_ath:
-                    tags.append("ath_row")
                 tree.insert("", "end", values=values, tags=tags)
             if end < len(rows):
                 try:
@@ -192,6 +200,33 @@ def build_journal_ui(parent: tk.Widget) -> None:
                 try:
                     show_status("Journal ready", spinning=False)
                     parent.after(1500, lambda: show_status("", spinning=False))
+                except Exception:
+                    pass
+
+                # Append separator row (blank) and summary row (since ATH)
+                try:
+                    sep_values = [""] * (1 + len(symbols))
+                    tree.insert("", "end", values=sep_values, tags=["even"])  # line break row
+
+                    last_row_values: List[str] = ["Since ATH"]
+                    last_date = rows[-1] if rows else None
+                    for sym in symbols:
+                        if sym not in ath_val or last_date is None:
+                            last_row_values.append("")
+                            continue
+                        try:
+                            days = (pd.to_datetime(last_date) - pd.to_datetime(ath_date[sym])).days
+                        except Exception:
+                            days = 0
+                        try:
+                            lv = float(last_val.get(sym, float("nan")))
+                            av = float(ath_val.get(sym, float("nan")))
+                            pct = 0.0 if not (av and av != 0) else ((lv / av) - 1.0) * 100.0
+                        except Exception:
+                            pct = 0.0
+                        cell = f"{days}d, {pct:+.2f}%"
+                        last_row_values.append(cell)
+                    tree.insert("", "end", values=last_row_values, tags=["odd"])  # summary row
                 except Exception:
                     pass
 
