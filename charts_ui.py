@@ -279,7 +279,7 @@ def build_charts_ui(parent: tk.Widget) -> None:
             return ordered
         return sorted(syms)
 
-    # Remember last selected symbol between sessions
+    # Remember last selected symbol and listbox scroll position between sessions
     def refresh_symbols() -> None:
         symbols_list.delete(0, tk.END)
         for sym in sorted_symbols():
@@ -288,7 +288,8 @@ def build_charts_ui(parent: tk.Widget) -> None:
         if symbols_list.size() > 0:
             try:
                 s = load_settings()
-                last = (s.get("charts", {}) or {}).get("last_symbol")
+                ch = (s.get("charts", {}) or {})
+                last = ch.get("last_symbol")
                 idx = 0
                 if isinstance(last, str) and last:
                     syms = [symbols_list.get(i) for i in range(symbols_list.size())]
@@ -297,6 +298,13 @@ def build_charts_ui(parent: tk.Widget) -> None:
                 symbols_list.selection_clear(0, tk.END)
                 symbols_list.selection_set(idx)
                 symbols_list.activate(idx)
+                # Restore scroll offset if available
+                try:
+                    first = int(ch.get("listbox_first_index", -1))
+                    if first >= 0:
+                        symbols_list.see(first)
+                except Exception:
+                    pass
             except Exception:
                 pass
             plot_selected()
@@ -448,21 +456,54 @@ def build_charts_ui(parent: tk.Widget) -> None:
         update_axes_fonts(ax2, font_scale)
         canvas.draw_idle()
 
-    symbols_list.bind("<<ListboxSelect>>", lambda _e: plot_selected())
+    def _on_select_listbox(_e=None):  # noqa: ANN001
+        plot_selected()
+        # Persist listbox scroll position (first visible index)
+        try:
+            first_visible = symbols_list.nearest(0)
+            s = load_settings()
+            ch = dict(s.get("charts", {}))
+            ch["listbox_first_index"] = int(first_visible)
+            s["charts"] = ch
+            save_settings(s)
+        except Exception:
+            pass
+
+    symbols_list.bind("<<ListboxSelect>>", _on_select_listbox)
     sort_combo.bind("<<ComboboxSelected>>", lambda _e: refresh_symbols())
 
     # Initial load
     apply_matplotlib_style(font_scale)
     reload_portfolio()
 
-    # Restore left/right pane divider position
+    # Restore left/right pane divider position on first idle after layout
+    def _restore_sash() -> None:
+        try:
+            s = load_settings()
+            ch = (s.get("charts", {}) or {})
+            ratio = ch.get("sash0_ratio")
+            abs_px = ch.get("sash0")
+            width = main_pane.winfo_width()
+            if width <= 1:
+                # Try again shortly if geometry not ready
+                try:
+                    parent.after(30, _restore_sash)
+                except Exception:
+                    pass
+                return
+            if isinstance(ratio, (int, float)) and 0.0 < float(ratio) < 1.0:
+                pos = int(float(ratio) * width)
+                if pos > 0:
+                    main_pane.sashpos(0, pos)
+            elif isinstance(abs_px, int) and abs_px > 0:
+                # Backward-compat: restore absolute pixel position
+                main_pane.sashpos(0, int(abs_px))
+        except Exception:
+            pass
     try:
-        s = load_settings()
-        sash = int((s.get("charts", {}) or {}).get("sash0", 0))
-        if sash > 0:
-            parent.after(0, lambda: main_pane.sashpos(0, sash))
+        parent.after_idle(_restore_sash)
     except Exception:
-        pass
+        _restore_sash()
 
     # Expose a hook on the parent so external code can trigger a refresh/plot
     setattr(parent, "_charts_refresh_and_plot", lambda: (reload_portfolio(),))
@@ -494,7 +535,13 @@ def register_charts_tab_handlers(notebook: ttk.Notebook, charts_frame: tk.Widget
             try:
                 main_pane = charts_frame.winfo_children()[0]
                 if isinstance(main_pane, ttk.PanedWindow):
-                    tab["sash0"] = int(main_pane.sashpos(0))
+                    pos = int(main_pane.sashpos(0))
+                    total = int(main_pane.winfo_width() or 0)
+                    if pos > 0:
+                        tab["sash0"] = pos  # keep for backward-compat
+                    if pos > 0 and total > 0:
+                        # Save as ratio to restore robustly across window sizes
+                        tab["sash0_ratio"] = max(0.05, min(0.95, float(pos) / float(total)))
             except Exception:
                 pass
             s["charts"] = tab

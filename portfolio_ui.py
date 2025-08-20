@@ -376,13 +376,58 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
         except Exception:
             pass
 
+    # Persist and restore selected symbol per portfolio file
+    def apply_saved_selection() -> None:
+        nonlocal selected_holding_symbol
+        try:
+            s = settings.load_settings()
+            tab = s.get("portfolio", {})
+            by_file = tab.get("selected_symbol_by_file", {})
+            path = storage.default_portfolio_path()
+            sym = (by_file.get(path) or by_file.get(os.path.basename(path)) or "") if isinstance(by_file, dict) else ""
+            if sym:
+                # Try to select this symbol in the list
+                try:
+                    items = [holdings_list.get(i) for i in range(holdings_list.size())]
+                    if sym in items:
+                        idx = items.index(sym)
+                        holdings_list.selection_clear(0, tk.END)
+                        holdings_list.selection_set(idx)
+                        holdings_list.activate(idx)
+                        selected_holding_symbol = sym
+                        refresh_events_list()
+                        refresh_symbols_label()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def save_selected_symbol() -> None:
+        try:
+            sym = selected_holding_symbol
+            if not sym:
+                return
+            s = settings.load_settings()
+            tab = dict(s.get("portfolio", {}))
+            by_file = dict(tab.get("selected_symbol_by_file", {}))
+            path = storage.default_portfolio_path()
+            by_file[path] = sym
+            by_file[os.path.basename(path)] = sym
+            tab["selected_symbol_by_file"] = by_file
+            s["portfolio"] = tab
+            settings.save_settings(s)
+        except Exception:
+            pass
+
     # Persist layout on request
     def save_state() -> None:
         try:
             s = settings.load_settings()
             tab = dict(s.get("portfolio", {}))
             try:
-                tab["sash0"] = int(main_pane.sashpos(0))
+                pos = int(main_pane.sashpos(0))
+                if pos > 0:
+                    tab["sash0"] = pos
             except Exception:
                 pass
             col_widths = {}
@@ -392,6 +437,18 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
                 except Exception:
                     continue
             tab["columns"] = col_widths
+            # Selected symbol per portfolio
+            try:
+                sym = selected_holding_symbol
+                if sym:
+                    by_file = dict(tab.get("selected_symbol_by_file", {}))
+                    path = storage.default_portfolio_path()
+                    by_file[path] = sym
+                    by_file[os.path.basename(path)] = sym
+                    tab["selected_symbol_by_file"] = by_file
+                
+            except Exception:
+                pass
             s["portfolio"] = tab
             settings.save_settings(s)
         except Exception:
@@ -916,6 +973,12 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
 
     def on_select_holding(_evt=None) -> None:  # noqa: ANN001
         refresh_events_list()
+        # Update selected symbol tracker and persist
+        try:
+            _ = get_selected_holding()
+            save_selected_symbol()
+        except Exception:
+            pass
 
     def on_delete_key(_evt=None) -> None:  # noqa: ANN001
         # Delete selected event
@@ -988,6 +1051,10 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
         mark_symbol_dirty(sym)
         refresh_holdings_list()
         try:
+            save_selected_symbol()
+        except Exception:
+            pass
+        try:
             storage.save_portfolio(portfolio)
         except Exception:
             pass
@@ -1054,6 +1121,7 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
 
     # Initial population and selection
     refresh_holdings_list()
+    apply_saved_selection()
     # Apply saved layout after first render
     apply_saved_layout()
     # Start polling for external changes (e.g., background dividend ingestion)
