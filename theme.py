@@ -8,13 +8,13 @@ import settings
 
 
 _DEFAULT_FONTS = {
-    "TkDefaultFont": ("Sans", 10),
-    "TkTextFont": ("Sans", 10),
-    "TkFixedFont": ("Monospace", 10),
-    "TkMenuFont": ("Sans", 10),
-    "TkHeadingFont": ("Sans", 11, "bold"),
-    "TkIconFont": ("Sans", 10),
-    "TkTooltipFont": ("Sans", 9),
+    "TkDefaultFont": ("Atkinson Hyperlegible", 10),
+    "TkTextFont": ("Atkinson Hyperlegible", 10),
+    "TkFixedFont": ("Atkinson Hyperlegible", 10),
+    "TkMenuFont": ("Atkinson Hyperlegible", 10),
+    "TkHeadingFont": ("Atkinson Hyperlegible", 11, "bold"),
+    "TkIconFont": ("Atkinson Hyperlegible", 10),
+    "TkTooltipFont": ("Atkinson Hyperlegible", 9),
 }
 
 
@@ -26,12 +26,29 @@ class FontScaler:
         self.apply_scale()
 
     def _init_named_fonts(self) -> None:
+        def resolve_family(requested: str) -> str:
+            try:
+                families = list(tkfont.families())
+            except Exception:
+                families = []
+            normalized = {f.replace(" ", "").replace("-", "").lower(): f for f in families}
+            req_norm = requested.replace(" ", "").replace("-", "").lower()
+            if req_norm in normalized:
+                return normalized[req_norm]
+            # Try fuzzy match for Atkinson family names
+            if "atkinson" in req_norm:
+                for key, actual in normalized.items():
+                    if "atkinson" in key and "hyperlegible" in key:
+                        return actual
+            # Fallback to a sane default
+            return "Sans"
+
         for name, (family, size, *style) in _DEFAULT_FONTS.items():
             try:
                 f = tkfont.nametofont(name)
             except tk.TclError:
                 f = tkfont.Font(name=name, exists=False)
-            f.config(family=family, size=size, weight=(style[0] if style else "normal"))
+            f.config(family=resolve_family(family), size=size, weight=(style[0] if style else "normal"))
 
     def apply_scale(self) -> None:
         for name in _DEFAULT_FONTS.keys():
@@ -80,6 +97,11 @@ def apply_dark_theme(root: tk.Tk) -> FontScaler:
     # Tk option database for classic widgets (e.g., Listbox)
     root.option_add("*background", surface)
     root.option_add("*foreground", text)
+    # Ensure classic widgets default to the app font
+    try:
+        root.option_add("*Font", "TkDefaultFont")
+    except Exception:
+        pass
     root.option_add("*Listbox.background", surface)
     root.option_add("*Listbox.foreground", text)
     root.option_add("*Listbox.selectBackground", select_bg)
@@ -97,6 +119,21 @@ def apply_dark_theme(root: tk.Tk) -> FontScaler:
     style.configure("TLabelframe.Label", background=bg, foreground=text)
     style.configure("TLabel", background=bg, foreground=text)
     style.configure("TCheckbutton", background=bg, foreground=text)
+
+    # Ensure ttk widgets inherit the application font
+    try:
+        default_font = tkfont.nametofont("TkDefaultFont")
+        heading_font = tkfont.nametofont("TkHeadingFont")
+        style.configure("TLabel", font=default_font)
+        style.configure("TButton", font=default_font)
+        style.configure("TCheckbutton", font=default_font)
+        style.configure("TEntry", font=default_font)
+        style.configure("TCombobox", font=default_font)
+        style.configure("TNotebook.Tab", font=default_font)
+        style.configure("Treeview", font=default_font)
+        style.configure("Treeview.Heading", font=heading_font)
+    except Exception:
+        pass
 
     # Notebook and tabs
     style.configure("TNotebook", background=bg, borderwidth=0)
