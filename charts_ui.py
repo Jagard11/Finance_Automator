@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import date, timedelta, datetime
-from typing import Optional
+from typing import Optional, List, Tuple, Dict
 
 import matplotlib
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -18,24 +18,42 @@ matplotlib.use("TkAgg")
 def build_charts_ui(parent: tk.Widget) -> None:
     portfolio: Portfolio = storage.load_portfolio()
 
-    top = ttk.Frame(parent)
-    top.pack(fill="x", padx=8, pady=8)
+    # cache for ROI computations per symbol to keep UI snappy
+    roi_cache: Dict[str, float] = {}
 
-    ttk.Label(top, text="Symbol:").pack(side="left")
-    symbol_var = tk.StringVar()
-    symbol_combo = ttk.Combobox(top, textvariable=symbol_var, state="readonly", width=16)
-    symbol_combo.pack(side="left", padx=8)
+    # Left panel: sort + symbols list; Right panel: chart
+    main_pane = ttk.PanedWindow(parent, orient=tk.HORIZONTAL)
+    main_pane.pack(fill="both", expand=True)
 
-    def reload_portfolio() -> None:
-        nonlocal portfolio
-        portfolio = storage.load_portfolio()
-        symbols = [h.symbol for h in portfolio.holdings]
-        symbol_combo["values"] = symbols
-        if symbols:
-            symbol_combo.current(0)
+    left = ttk.Frame(main_pane)
+    right = ttk.Frame(main_pane)
+    main_pane.add(left, weight=1)
+    main_pane.add(right, weight=4)
 
-    ttk.Button(top, text="Refresh", command=reload_portfolio).pack(side="left")
-    ttk.Button(top, text="Plot", command=lambda: plot_selected()).pack(side="left", padx=(8, 0))
+    sort_row = ttk.Frame(left)
+    sort_row.pack(fill="x", padx=8, pady=(8, 4))
+
+    ttk.Label(sort_row, text="Sort:").pack(side="left")
+    sort_var = tk.StringVar(value="Symbol A-Z")
+    sort_combo = ttk.Combobox(
+        sort_row,
+        textvariable=sort_var,
+        state="readonly",
+        width=18,
+        values=[
+            "Symbol A-Z",
+            "Symbol Z-A",
+            "Oldest first",
+            "Newest first",
+            "Highest return",
+            "Lowest return",
+        ],
+    )
+    sort_combo.pack(side="left", padx=8)
+
+    ttk.Label(left, text="Symbols").pack(anchor="w", padx=8)
+    symbols_list = tk.Listbox(left, height=12)
+    symbols_list.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
     # Figure area with dark style
     matplotlib.rcParams.update({
@@ -56,15 +74,9 @@ def build_charts_ui(parent: tk.Widget) -> None:
     ax.set_xlabel("Date", color="#ffffff")
     ax.set_ylabel("Adj Close", color="#ffffff")
 
-    canvas = FigureCanvasTkAgg(fig, master=parent)
+    canvas = FigureCanvasTkAgg(fig, master=right)
     canvas_widget = canvas.get_tk_widget()
     canvas_widget.pack(fill="both", expand=True)
-
-    def find_holding(symbol: str) -> Optional[Holding]:
-        for h in portfolio.holdings:
-            if h.symbol.upper() == symbol.upper():
-                return h
-        return None
 
     def normalize_date(date_str: str) -> str:
         s = (date_str or "").strip()
@@ -75,7 +87,21 @@ def build_charts_ui(parent: tk.Widget) -> None:
                 return datetime.strptime(s, fmt).date().isoformat()
             except ValueError:
                 continue
-        return s  # leave as-is; fetch may still work or show no data
+        return s
+
+    def holding_start_date(holding: Holding) -> str:
+        if not holding.events:
+            return date.max.isoformat()
+        try:
+            return min(normalize_date(e.date) for e in holding.events if e.date)
+        except ValueError:
+            return date.max.isoformat()
+
+    def reload_portfolio() -> None:
+        nonlocal portfolio, roi_cache
+        portfolio = storage.load_portfolio()
+        roi_cache = {}
+        refresh_symbols()
 
     def compute_date_range(holding: Holding) -> tuple[str, str]:
         if not holding.events:
@@ -96,19 +122,108 @@ def build_charts_ui(parent: tk.Widget) -> None:
         end = last_flat or date.today().isoformat()
         return start, end
 
+    def compute_holding_return(holding: Holding) -> Optional[float]:
+        # simple ROI: (last_close / first_close) - 1 over the holding date range
+        sym = holding.symbol.upper()
+        if sym in roi_cache:
+            return roi_cache[sym]
+        start, end = compute_date_range(holding)
+        end_plus = (date.fromisoformat(end) + timedelta(days=1)).isoformat()
+        df = fetch_price_history(sym, start, end_plus)
+        if df is None or df.empty:
+            roi_cache[sym] = None  # type: ignore[assignment]
+            return None
+        series = df["Close"] if "Close" in df.columns else df.iloc[:, 0]
+        try:
+            first_price = float(series.dropna().iloc[0])
+            last_price = float(series.dropna().iloc[-1])
+        except Exception:
+            roi_cache[sym] = None  # type: ignore[assignment]
+            return None
+        if first_price <= 0:
+            roi_cache[sym] = None  # type: ignore[assignment]
+            return None
+        roi = (last_price / first_price) - 1.0
+        roi_cache[sym] = roi
+        return roi
+
+    def sorted_symbols() -> List[str]:
+        syms = [h.symbol for h in portfolio.holdings]
+        mode = sort_var.get()
+        if mode == "Symbol A-Z":
+            return sorted(syms)
+        if mode == "Symbol Z-A":
+            return sorted(syms, reverse=True)
+        if mode in ("Oldest first", "Newest first"):
+            pairs: List[Tuple[str, str]] = [(holding_start_date(h), h.symbol) for h in portfolio.holdings]
+            pairs.sort(key=lambda p: (p[0], p[1]))
+            if mode == "Newest first":
+                pairs.reverse()
+            return [sym for _, sym in pairs]
+        if mode in ("Highest return", "Lowest return"):
+            # compute ROI and sort accordingly; None values go to the end
+            roi_pairs: List[Tuple[float, str]] = []
+            missing: List[str] = []
+            for h in portfolio.holdings:
+                roi = compute_holding_return(h)
+                if roi is None:
+                    missing.append(h.symbol)
+                else:
+                    roi_pairs.append((roi, h.symbol))
+            roi_pairs.sort(key=lambda p: (p[0], p[1]))
+            if mode == "Highest return":
+                roi_pairs.reverse()
+            ordered = [sym for _, sym in roi_pairs]
+            ordered.extend(sorted(missing))
+            return ordered
+        return sorted(syms)
+
+    def refresh_symbols() -> None:
+        symbols_list.delete(0, tk.END)
+        for sym in sorted_symbols():
+            symbols_list.insert(tk.END, sym)
+        # select first and plot
+        if symbols_list.size() > 0:
+            symbols_list.selection_clear(0, tk.END)
+            symbols_list.selection_set(0)
+            symbols_list.activate(0)
+            plot_selected()
+        else:
+            clear_chart()
+
+    def clear_chart() -> None:
+        ax.clear()
+        ax.set_facecolor("#1e1e1e")
+        ax.set_title("Price History", color="#ffffff")
+        ax.set_xlabel("Date", color="#ffffff")
+        ax.set_ylabel("Adj Close", color="#ffffff")
+        ax.text(0.5, 0.5, "No symbols", transform=ax.transAxes, ha="center", va="center", color="#cccccc")
+        ax.grid(True, color="#333333", linestyle="--", linewidth=0.5)
+        for spine in ax.spines.values():
+            spine.set_color("#666666")
+        canvas.draw()
+
+    def find_holding(symbol: str) -> Optional[Holding]:
+        for h in portfolio.holdings:
+            if h.symbol.upper() == symbol.upper():
+                return h
+        return None
+
     def plot_selected() -> None:
-        symbol = symbol_var.get()
-        if not symbol:
-            messagebox.showwarning("No symbol", "Select a symbol to plot.")
+        try:
+            idx = symbols_list.curselection()[0]
+        except IndexError:
+            clear_chart()
             return
+        symbol = symbols_list.get(idx)
         holding = find_holding(symbol)
         if holding is None:
-            messagebox.showwarning("Not found", f"No holding found for {symbol}.")
+            clear_chart()
             return
         start, end = compute_date_range(holding)
         # yfinance end date is exclusive, add one day
-        end_plus = (date.fromisoformat(normalize_date(end)) + timedelta(days=1)).isoformat()
-        df = fetch_price_history(symbol, normalize_date(start), end_plus)
+        end_plus = (date.fromisoformat(end) + timedelta(days=1)).isoformat()
+        df = fetch_price_history(symbol, start, end_plus)
         ax.clear()
         ax.set_facecolor("#1e1e1e")
         ax.set_title(f"{symbol} Price History", color="#ffffff")
@@ -125,4 +240,25 @@ def build_charts_ui(parent: tk.Widget) -> None:
             spine.set_color("#666666")
         canvas.draw()
 
+    symbols_list.bind("<<ListboxSelect>>", lambda _e: plot_selected())
+    sort_combo.bind("<<ComboboxSelected>>", lambda _e: refresh_symbols())
+
+    # Initial load
     reload_portfolio()
+
+    # Expose a hook on the parent so external code can trigger a refresh/plot
+    setattr(parent, "_charts_refresh_and_plot", lambda: (reload_portfolio(),))
+
+
+def register_charts_tab_handlers(notebook: ttk.Notebook, charts_frame: tk.Widget) -> None:
+    def on_tab_changed(_evt=None):  # noqa: ANN001
+        try:
+            current = notebook.select()
+            if current == str(charts_frame):
+                # Call the refresh hook if present
+                fn = getattr(charts_frame, "_charts_refresh_and_plot", None)
+                if callable(fn):
+                    fn()
+        except Exception:
+            pass
+    notebook.bind("<<NotebookTabChanged>>", on_tab_changed)
