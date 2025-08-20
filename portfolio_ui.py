@@ -2,12 +2,13 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from tkinter import simpledialog
 from typing import Optional
+import pandas as pd
 from datetime import datetime
 import os
 
 from models import Portfolio, Holding, Event, EventType
 import storage
-from values_cache import mark_symbol_dirty
+from values_cache import mark_symbol_dirty, read_values_cache
 from startup_tasks import get_task_queue
 
 
@@ -101,9 +102,13 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     ttk.Label(right_frame, text="Events").pack(anchor="w")
 
     # Sortable table for events
-    columns = ("symbol", "date", "type", "shares", "price", "amount", "note")
-    events_tree = ttk.Treeview(right_frame, columns=columns, show="headings", selectmode="browse")
+    columns = ("symbol", "date", "type", "shares", "price", "amount", "total_gain", "total_gain_pct", "day_gain", "day_gain_pct", "note")
+    # Add horizontal scrollbar
+    xscroll = ttk.Scrollbar(right_frame, orient="horizontal")
+    xscroll.pack(side="bottom", fill="x")
+    events_tree = ttk.Treeview(right_frame, columns=columns, show="headings", selectmode="browse", xscrollcommand=xscroll.set)
     events_tree.pack(fill="both", expand=True)
+    xscroll.config(command=events_tree.xview)
 
     events_tree.heading("symbol", text="Symbol")
     events_tree.heading("date", text="Date")
@@ -111,6 +116,10 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     events_tree.heading("shares", text="Shares")
     events_tree.heading("price", text="Price")
     events_tree.heading("amount", text="Cost")
+    events_tree.heading("total_gain", text="Total $")
+    events_tree.heading("total_gain_pct", text="Total %")
+    events_tree.heading("day_gain", text="Day $")
+    events_tree.heading("day_gain_pct", text="Day %")
     events_tree.heading("note", text="Note")
 
     # Initial column widths (will be auto-adjusted on font scale changes)
@@ -121,6 +130,10 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     events_tree.column("price", width=90, anchor="e")
     events_tree.column("amount", width=90, anchor="e")
     events_tree.column("note", width=300, anchor="w")
+    events_tree.column("total_gain", width=110, anchor="e")
+    events_tree.column("total_gain_pct", width=90, anchor="e")
+    events_tree.column("day_gain", width=110, anchor="e")
+    events_tree.column("day_gain_pct", width=90, anchor="e")
 
     # Placeholders for new row prompts and draft buffer for new entry
     placeholder_symbol = "Enter symbol"
@@ -148,13 +161,27 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             # Estimate width by character units times a factor
             def ch(n: int) -> int:
                 return int(n * max(6, f.measure("0")) / 1.6)
-            events_tree.column("symbol", width=ch(10))
-            events_tree.column("date", width=ch(12))
-            events_tree.column("type", width=ch(12))
-            events_tree.column("shares", width=ch(10))
-            events_tree.column("price", width=ch(10))
-            events_tree.column("amount", width=ch(10))
-            events_tree.column("note", width=ch(40))
+            base_widths = {
+                "symbol": ch(10),
+                "date": ch(12),
+                "type": ch(12),
+                "shares": ch(10),
+                "price": ch(10),
+                "amount": ch(10),
+                "total_gain": ch(12),
+                "total_gain_pct": ch(10),
+                "day_gain": ch(12),
+                "day_gain_pct": ch(10),
+                "note": ch(40),
+            }
+            # Ensure minimum width so header text is never truncated
+            for col_id, base_w in base_widths.items():
+                try:
+                    header_txt = events_tree.heading(col_id, option="text")
+                    header_w = f.measure(str(header_txt)) + 24
+                except Exception:
+                    header_w = 0
+                events_tree.column(col_id, width=max(base_w, header_w))
         except Exception:
             pass
 
@@ -208,6 +235,12 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
         if col == "price":
             return float(ev.price)
         if col == "amount":
+            # sort by computed cost instead of raw amount
+            try:
+                if ev.type in (EventType.PURCHASE, EventType.SALE):
+                    return float(ev.shares or 0.0) * float(ev.price or 0.0)
+            except Exception:
+                pass
             return float(ev.amount)
         if col == "note":
             return (ev.note or "").lower()
@@ -441,7 +474,8 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
         elif col == "price":
             ev.price = parse_float_or_zero(value)
         elif col == "amount":
-            ev.amount = parse_float_or_zero(value)
+            # amount is auto-calculated as cost for purchase/sale; keep readonly in UI
+            pass
         elif col == "note":
             ev.note = value or ""
         refresh_events_list()
@@ -529,6 +563,59 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     for col in columns:
         events_tree.heading(col, text=events_tree.heading(col, option="text"), command=lambda c=col: on_sort(c))
 
+    def _format_price(p: float) -> str:
+        try:
+            return f"${p:,.4f}".rstrip("0").rstrip(".")
+        except Exception:
+            return f"${p}"
+
+    def _get_last_and_prev_price(symbol: str) -> tuple[float | None, float | None]:
+        try:
+            vdf = read_values_cache(symbol)
+            if vdf is not None and not vdf.empty:
+                vdf = vdf.copy()
+                vdf.sort_values("date", inplace=True)
+                vdf["shares"] = pd.to_numeric(vdf.get("shares"), errors="coerce")
+                vdf["value"] = pd.to_numeric(vdf.get("value"), errors="coerce")
+                vdf = vdf[(vdf["shares"] > 0) & (~vdf["value"].isna())]
+                if len(vdf) >= 1:
+                    last_row = vdf.iloc[-1]
+                    s_last = float(last_row["shares"]) if float(last_row["shares"]) > 0 else None
+                    last = (float(last_row["value"]) / s_last) if s_last else None
+                else:
+                    last = None
+                if len(vdf) >= 2:
+                    prev_row = vdf.iloc[-2]
+                    s_prev = float(prev_row["shares"]) if float(prev_row["shares"]) > 0 else None
+                    prev = (float(prev_row["value"]) / s_prev) if s_prev else None
+                else:
+                    prev = None
+                if last is None or prev is None:
+                    # Ensure caches are rebuilt rather than using any fallback
+                    try:
+                        mark_symbol_dirty(symbol)
+                        q = get_task_queue()
+                        if q is not None:
+                            q.put_nowait({"type": "warm_values"})
+                        # Notify other tabs
+                        try:
+                            parent.event_generate("<<PortfolioChanged>>", when="tail")
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+                return last, prev
+        except Exception:
+            pass
+        try:
+            mark_symbol_dirty(symbol)
+            q = get_task_queue()
+            if q is not None:
+                q.put_nowait({"type": "warm_values"})
+        except Exception:
+            pass
+        return None, None
+
     def refresh_events_list() -> None:
         # Remember selection
         prev_selected = None
@@ -543,16 +630,63 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
         holding = get_selected_holding()
         if holding is not None:
             enumerated = list(enumerate(holding.events))
+            last_price, prev_price = _get_last_and_prev_price(holding.symbol)
             enumerated.sort(key=lambda pair: build_sort_tuple(pair[1], holding.symbol, pair[0]), reverse=events_sort_reverse)
             for original_idx, e in enumerated:
                 iid = f"{holding.symbol}:{original_idx}"
+                # Compute cost (non-writable): price * shares when type is purchase/sale
+                try:
+                    if e.type in (EventType.PURCHASE, EventType.SALE):
+                        cost_val = float(e.shares or 0.0) * float(e.price or 0.0)
+                        cost = f"${cost_val:,.2f}"
+                    else:
+                        cost = f"{e.amount:g}" if e.amount else ""
+                except Exception:
+                    cost = f"{e.amount:g}" if e.amount else ""
+
+                # Price formatting
+                price_txt = _format_price(float(e.price)) if e.price else ""
+
+                # Gains
+                total_gain_txt = ""
+                total_gain_pct_txt = ""
+                day_gain_txt = ""
+                day_gain_pct_txt = ""
+                try:
+                    if last_price is not None and e.type in (EventType.PURCHASE, EventType.SALE):
+                        # Average entry price per event row isn't precise; we use row price
+                        if float(e.price or 0) > 0 and float(e.shares or 0) != 0:
+                            shares_signed = float(e.shares)
+                            if e.type == EventType.SALE:
+                                shares_signed = -shares_signed
+                            entry_val = float(e.price) * shares_signed
+                            current_val = last_price * shares_signed
+                            total_gain = current_val - entry_val
+                            total_gain_txt = f"${total_gain:,.0f}"
+                            if entry_val != 0:
+                                total_gain_pct_txt = f"{(current_val/entry_val - 1.0)*100:.2f}%"
+                    if last_price is not None and prev_price is not None and float(e.shares or 0) != 0 and e.type in (EventType.PURCHASE, EventType.SALE):
+                        shares_signed = float(e.shares)
+                        if e.type == EventType.SALE:
+                            shares_signed = -shares_signed
+                        day_gain = (last_price - prev_price) * shares_signed
+                        day_gain_txt = f"${day_gain:,.0f}"
+                        if prev_price != 0:
+                            day_gain_pct_txt = f"{((last_price/prev_price)-1.0)*100:.2f}%"
+                except Exception:
+                    pass
+
                 events_tree.insert("", "end", iid=iid, values=(
                     holding.symbol,
                     format_date_for_display(e.date),
                     e.type.value,
                     f"{e.shares:g}" if e.shares else "",
-                    f"{e.price:g}" if e.price else "",
-                    f"{e.amount:g}" if e.amount else "",
+                    price_txt,
+                    cost,
+                    total_gain_txt,
+                    total_gain_pct_txt,
+                    day_gain_txt,
+                    day_gain_pct_txt,
                     e.note,
                 ))
 
@@ -562,9 +696,10 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             new_entry_values["date"] or placeholder_date,
             new_entry_values["type"] or placeholder_type,
             new_entry_values["shares"] or placeholder_shares,
-            new_entry_values["price"] or placeholder_price,
-            new_entry_values["amount"] or placeholder_amount,
-            new_entry_values["note"] or placeholder_note,
+            (new_entry_values["price"] or placeholder_price),
+            (new_entry_values["amount"] or placeholder_amount),
+            "", "", "", "",
+            (new_entry_values["note"] or placeholder_note),
         ))
         # Restore selection if possible
         if prev_selected and prev_selected in events_tree.get_children():
