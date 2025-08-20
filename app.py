@@ -3,6 +3,7 @@ from tkinter import ttk
 
 from portfolio_ui import build_portfolio_ui
 from charts_ui import build_charts_ui, register_charts_tab_handlers
+from summary_ui import build_summary_ui, register_summary_tab_handlers
 from theme import apply_dark_theme
 from startup_tasks import run_startup_tasks_in_background
 
@@ -10,7 +11,7 @@ from startup_tasks import run_startup_tasks_in_background
 def main() -> None:
     root = tk.Tk()
     root.title("Finance Automator")
-    root.geometry("1000x700")
+    root.geometry("1100x800")
 
     scaler = apply_dark_theme(root)
 
@@ -35,12 +36,9 @@ def main() -> None:
     def on_reset(_evt=None) -> None:  # noqa: ANN001
         scaler.update_scale(1.25)
 
-    # Windows/macOS style
     root.bind_all("<Control-MouseWheel>", on_ctrl_mousewheel)
-    # X11 style (Linux)
     root.bind_all("<Control-Button-4>", on_ctrl_mousewheel)
     root.bind_all("<Control-Button-5>", on_ctrl_mousewheel)
-    # Reset shortcuts
     root.bind_all("<Control-Key-0>", on_reset)
     root.bind_all("<Control-KP_0>", on_reset)
 
@@ -50,15 +48,23 @@ def main() -> None:
     notebook = ttk.Notebook(root)
     notebook.pack(fill="both", expand=True)
 
+    summary_frame = ttk.Frame(notebook)
     portfolio_frame = ttk.Frame(notebook)
     charts_frame = ttk.Frame(notebook)
 
+    notebook.add(summary_frame, text="Summary")
     notebook.add(portfolio_frame, text="Portfolio")
     notebook.add(charts_frame, text="Charts")
 
+    build_summary_ui(summary_frame)
     build_portfolio_ui(portfolio_frame)
     build_charts_ui(charts_frame)
+
+    register_summary_tab_handlers(notebook, summary_frame)
     register_charts_tab_handlers(notebook, charts_frame)
+
+    # Ensure Summary is default selected tab
+    notebook.select(summary_frame)
 
     root.mainloop()
 
