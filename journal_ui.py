@@ -15,276 +15,300 @@ from journal_builder import journal_csv_path, rebuild_journal_in_background
 
 
 def build_journal_ui(parent: tk.Widget) -> None:
-    portfolio = storage.load_portfolio()
+	portfolio = storage.load_portfolio()
 
-    # Status row (shows when journal is building/loading)
-    status_row = ttk.Frame(parent)
-    status_row.pack(fill="x", padx=8, pady=(6, 0))
-    status_var = tk.StringVar(value="")
-    status_label = ttk.Label(status_row, textvariable=status_var)
-    status_label.pack(side="left")
-    status_bar = ttk.Progressbar(status_row, mode="indeterminate", length=120)
-    # status_bar is started/stopped dynamically; keep it packed when active only
+	# Status row (shows when journal is building/loading)
+	status_row = ttk.Frame(parent)
+	status_row.pack(fill="x", padx=8, pady=(6, 0))
+	status_var = tk.StringVar(value="")
+	status_label = ttk.Label(status_row, textvariable=status_var)
+	status_label.pack(side="left")
+	status_bar = ttk.Progressbar(status_row, mode="indeterminate", length=120)
+	# status_bar is started/stopped dynamically; keep it packed when active only
 
-    def show_status(text: str, spinning: bool = False) -> None:
-        status_var.set(text)
-        # Update tab label suffix if handler is attached
-        try:
-            setter = getattr(parent, "_journal_set_tab_suffix", None)
-            if callable(setter):
-                suffix = ""
-                if spinning and text:
-                    suffix = " (" + text.replace("...", "").strip() + "...)"
-                elif text:
-                    suffix = " (" + text + ")"
-                setter(suffix)
-        except Exception:
-            pass
-        if spinning:
-            try:
-                status_bar.pack(side="left", padx=(8, 0))
-                status_bar.start(50)
-            except Exception:
-                pass
-        else:
-            try:
-                status_bar.stop()
-                status_bar.pack_forget()
-            except Exception:
-                pass
+	def show_status(text: str, spinning: bool = False) -> None:
+		status_var.set(text)
+		# Update tab label suffix if handler is attached
+		try:
+			setter = getattr(parent, "_journal_set_tab_suffix", None)
+			if callable(setter):
+				suffix = ""
+				if spinning and text:
+					suffix = " (" + text.replace("...", "").strip() + "...)"
+				elif text:
+					suffix = " (" + text + ")"
+				setter(suffix)
+		except Exception:
+			pass
+		if spinning:
+			try:
+				status_bar.pack(side="left", padx=(8, 0))
+				status_bar.start(50)
+			except Exception:
+				pass
+		else:
+			try:
+				status_bar.stop()
+				status_bar.pack_forget()
+			except Exception:
+				pass
 
-    # Fonts
-    default_font = tkfont.nametofont("TkDefaultFont")
-    highlight_font = tkfont.Font(family=default_font.cget("family"), size=default_font.cget("size"), weight="bold", underline=1)
+	# Fonts
+	default_font = tkfont.nametofont("TkDefaultFont")
+	highlight_font = tkfont.Font(family=default_font.cget("family"), size=default_font.cget("size"), weight="bold", underline=1)
 
-    # Treeview-based table (more efficient than per-cell Labels)
-    container = ttk.Frame(parent)
-    container.pack(fill="both", expand=True)
+	# Virtualized sheet for large tables with per-cell styling
+	from tksheet import Sheet  # type: ignore
+	container = ttk.Frame(parent)
+	container.pack(fill="both", expand=True)
+	container.grid_rowconfigure(0, weight=1)
+	container.grid_columnconfigure(0, weight=1)
+	
+	sheet = Sheet(container)
+	# Dark theme to avoid white flash and match app theme
+	# Resolve font tuples for tksheet (expects tuples like (family, size, style))
+	try:
+		_base_family = default_font.cget("family")
+		_base_size = int(default_font.cget("size"))
+		head_f = tkfont.nametofont("TkHeadingFont")
+		_head_family = head_f.cget("family")
+		_head_size = int(head_f.cget("size"))
+		_table_font = (_base_family, _base_size, "normal")
+		_index_font = (_base_family, _base_size, "normal")
+		_header_font = (_head_family, _head_size, "bold")
+	except Exception:
+		_table_font = ("Sans", 10, "normal")
+		_index_font = ("Sans", 10, "normal")
+		_header_font = ("Sans", 11, "bold")
 
-    tree = ttk.Treeview(container, show="headings")
-    yscroll_tree = ttk.Scrollbar(container, orient="vertical", command=tree.yview)
-    xscroll_tree = ttk.Scrollbar(container, orient="horizontal", command=tree.xview)
-    tree.configure(yscrollcommand=yscroll_tree.set, xscrollcommand=xscroll_tree.set)
+	sheet.set_options(
+		table_bg="#1e1e1e",
+		table_fg="#dddddd",
+		header_bg="#2b2b2b",
+		header_fg="#ffffff",
+		top_left_bg="#2b2b2b",
+		header_border_fg="#333333",
+		table_grid_fg="#2a2a2a",
+		row_height=24,
+		header_height=28,
+		# Ensure tksheet uses the app's fonts
+		table_font=_table_font,
+		header_font=_header_font,
+		index_font=_index_font,
+	)
+	sheet.enable_bindings((
+		"single_select",
+		"row_select",
+		"column_select",
+		"arrowkeys",
+		"right_click_popup_menu",
+		"rc_insert_row",
+		"rc_delete_row",
+		"rc_insert_column",
+		"rc_delete_column",
+		"copy",
+		"cut",
+		"paste",
+		"edit_cell",
+	))
+	sheet.grid(row=0, column=0, sticky="nsew")
 
-    # Use grid to ensure scrollbars are always visible and properly laid out
-    container.grid_rowconfigure(0, weight=1)
-    container.grid_columnconfigure(0, weight=1)
-    tree.grid(row=0, column=0, sticky="nsew")
-    yscroll_tree.grid(row=0, column=1, sticky="ns")
-    xscroll_tree.grid(row=1, column=0, sticky="ew")
+	journal_path = journal_csv_path()
+	last_mtime = os.path.getmtime(journal_path) if os.path.exists(journal_path) else 0.0
+	last_refresh = 0.0
+	journal_active = False
 
-    journal_path = journal_csv_path()
-    last_mtime = os.path.getmtime(journal_path) if os.path.exists(journal_path) else 0.0
-    last_refresh = 0.0
-    render_seq = 0
-    journal_active = False
+	def read_journal() -> pd.DataFrame:
+		if not os.path.exists(journal_path):
+			return pd.DataFrame()
+		try:
+			df = pd.read_csv(journal_path)
+			if df.empty or df.shape[1] <= 1:
+				return pd.DataFrame()
+			df["date"] = pd.to_datetime(df["date"]).dt.date
+			df.set_index("date", inplace=True)
+			return df
+		except Exception:
+			return pd.DataFrame()
 
-    def on_configure(_evt=None):  # noqa: ANN001
-        pass
+	def refresh_grid() -> None:
+		nonlocal last_refresh
+		now = time.time()
+		if now - last_refresh < 1.0:
+			return
+		last_refresh = now
+		df = read_journal()
+		if df is None or df.empty:
+			show_status("Building journal...", spinning=True)
+			rebuild_journal_in_background()
+			return
+		show_status("Rendering journal...", spinning=True)
+		# Drop all-empty columns (symbols with no values)
+		df = df.dropna(axis=1, how="all")
+		if df.shape[1] == 0:
+			show_status("No journal data available yet.", spinning=False)
+			return
+		symbols = list(df.columns)
+		# Build data matrix
+		rows = list(df.index)
+		data: List[List[str]] = []
+		for d in rows:
+			row: List[str] = [getattr(d, "isoformat", lambda: str(d))()]
+			for sym in symbols:
+				val = df.at[d, sym]
+				if pd.isna(val):
+					row.append("")
+					continue
+				try:
+					num = float(val)
+					dollars = math.ceil(num)
+					row.append(f"${dollars:,}")
+				except Exception:
+					row.append(str(val))
+			data.append(row)
+		
+		# Set headers and data
+		sheet.headers(["date"] + symbols)
+		sheet.set_sheet_data(data, reset_highlights=True, redraw=False)
+		nrows = len(data)
+		# Center align headers and columns
+		for c in range(len(symbols) + 1):
+			try:
+				sheet.align_header(c, align="center")
+				sheet.align_column(c, align="center")
+			except Exception:
+				pass
+		
+		# Compute per-symbol ATHs and defer styling to next idle to keep first paint instant
+		ath_targets: List[tuple[int, int]] = []
+		# Build a robust map from date->row index for precise targeting
+		row_index_map: Dict[pd.Timestamp, int] = {}
+		for idx, d in enumerate(rows):
+			try:
+				row_index_map[pd.Timestamp(d)] = idx
+			except Exception:
+				try:
+					row_index_map[pd.to_datetime(d)] = idx
+				except Exception:
+					continue
+		for col_idx, sym in enumerate(symbols, start=1):
+			try:
+				coln = pd.to_numeric(df[sym], errors="coerce")
+				if coln.isna().all():
+					continue
+				max_label = coln.idxmax()
+				# Resolve row position using the map to avoid type mismatches
+				try:
+					row_pos = row_index_map[pd.Timestamp(max_label)]
+				except Exception:
+					try:
+						row_pos = row_index_map[pd.to_datetime(max_label)]
+					except Exception:
+						continue
+				ath_targets.append((row_pos, col_idx))
+				valtxt = sheet.get_cell_data(row_pos, col_idx)
+				if not str(valtxt).startswith("▲ "):
+					sheet.set_cell_data(row_pos, col_idx, f"▲ {valtxt}", redraw=False)
+			except Exception:
+				continue
+		
+		# Separator and summary rows
+		# Insert exactly one blank separator row immediately after last data row
+		sep = [""] * (1 + len(symbols))
+		sheet.insert_rows(rows=[sep], idx=nrows, redraw=False)
+		last_row_label = ["Since ATH"]
+		last_vals = []
+		for sym in symbols:
+			try:
+				coln = pd.to_numeric(df[sym], errors="coerce").ffill()
+				if coln.isna().all():
+					last_vals.append("")
+					continue
+				ath = float(coln.max())
+				ath_date = coln.idxmax()
+				last_v = float(coln.iloc[-1])
+				days = (pd.to_datetime(rows[-1]) - pd.to_datetime(ath_date)).days
+				pct = 0.0 if ath == 0 else ((last_v / ath) - 1.0) * 100.0
+				last_vals.append(f"{days}d, {pct:+.2f}%")
+			except Exception:
+				last_vals.append("")
+		last_row = last_row_label + last_vals
+		# Insert summary row right after separator row
+		sheet.insert_rows(rows=[last_row], idx=nrows + 1, redraw=False)
+		# Ensure the last row is visually distinct by applying a subtle background
+		try:
+			last_index = nrows + 1
+			for c in range(sheet.total_columns()):
+				sheet.highlight_cells(row=last_index, column=c, bg="#203040", fg=None, border_color=None, redraw=False)
+		except Exception:
+			pass
+		
+		# Zebra striping
+		sheet.set_options(table_grid_fg="#2a2a2a")
+		sheet.redraw()
+		# Apply bold/underline to ATH cells after first paint for responsiveness
+		def _apply_ath_styles() -> None:
+			for r, c in ath_targets:
+				try:
+					# Per-cell bold + underline, plus a bright foreground for visibility
+					sheet.highlight_cells(row=r, column=c, bg=None, fg="#ffd166", border_color=None, redraw=False, font=highlight_font)
+				except Exception:
+					pass
+			sheet.redraw()
+		parent.after(0, _apply_ath_styles)
+		show_status("Journal ready", spinning=False)
+		parent.after(1500, lambda: show_status("", spinning=False))
 
-    def read_journal() -> pd.DataFrame:
-        if not os.path.exists(journal_path):
-            return pd.DataFrame()
-        try:
-            df = pd.read_csv(journal_path)
-            if df.empty or df.shape[1] <= 1:
-                return pd.DataFrame()
-            df["date"] = pd.to_datetime(df["date"]).dt.date
-            df.set_index("date", inplace=True)
-            return df
-        except Exception:
-            return pd.DataFrame()
+	def poll_for_updates() -> None:
+		nonlocal last_mtime
+		try:
+			m = os.path.getmtime(journal_path) if os.path.exists(journal_path) else 0.0
+		except Exception:
+			m = last_mtime
+		if m > last_mtime:
+			last_mtime = m
+			refresh_grid()
+		parent.after(1000, poll_for_updates)
 
-    def refresh_grid() -> None:
-        nonlocal highlight_font, last_refresh, render_seq
-        now = time.time()
-        if now - last_refresh < 1.0:
-            return
-        last_refresh = now
-        # Clear tree
-        for iid in tree.get_children():
-            tree.delete(iid)
-        df = read_journal()
-        if df is None or df.empty:
-            show_status("Building journal...", spinning=True)
-            # Keep table empty and kick off build
-            # Kick off build if missing
-            rebuild_journal_in_background()
-            return
-        show_status("Rendering journal...", spinning=True)
-        # Drop all-empty columns (symbols with no values)
-        df = df.dropna(axis=1, how="all")
-        if df.shape[1] == 0:
-            show_status("No journal data available yet.", spinning=False)
-            return
-        symbols = list(df.columns)
-        # Configure tree columns: date + symbols (centered)
-        columns = ["date"] + symbols
-        tree["columns"] = columns
-        # Headings
-        for col in columns:
-            tree.heading(col, text=col, anchor="center")
-            tree.column(col, width=100, anchor="center")
+	def reload_and_refresh() -> None:
+		try:
+			dfnt = tkfont.nametofont("TkDefaultFont")
+			highlight_font.configure(family=dfnt.cget("family"), size=dfnt.cget("size"))
+		except Exception:
+			pass
+		refresh_grid()
 
-        # Body rendered in chunks to avoid stalls
-        rows = list(df.index)
-        # Pre-compute max index per symbol for ATH highlighting and stats
-        max_idx: Dict[str, int] = {}
-        ath_val: Dict[str, float] = {}
-        last_val: Dict[str, float] = {}
-        ath_date: Dict[str, datetime] = {}
-        for sym in symbols:
-            try:
-                coln = pd.to_numeric(df[sym], errors="coerce")
-                if coln.isna().all():
-                    continue
-                max_label = coln.idxmax()
-                pos = int(df.index.get_indexer_for([max_label])[0])
-                max_idx[sym] = pos
-                ath_val[sym] = float(coln.max())
-                last_val[sym] = float(coln.ffill().iloc[-1])
-                # max_label is a date object already
-                ath_date[sym] = pd.to_datetime(max_label).to_pydatetime()
-            except Exception:
-                continue
+	parent.bind("<<FontScaleChanged>>", lambda _e: reload_and_refresh())
 
-        # Configure row tags for zebra striping and ATH font
-        try:
-            tree.tag_configure("odd", background="#1b1b1b")
-            tree.tag_configure("even", background="#232323")
-        except Exception:
-            pass
-        chunk = 200
-        render_seq += 1
-        my_seq = render_seq
+	# Initial content and polling
+	show_status("Waiting to build journal...", spinning=False)
+	parent.after(1000, poll_for_updates)
 
-        def render_chunk(start: int) -> None:
-            # Abort if a new refresh started or tab not active
-            if my_seq != render_seq or not journal_active:
-                return
-            end = min(start + chunk, len(rows))
-            def underline_text(s: str) -> str:
-                try:
-                    return "".join(ch + "\u0332" for ch in s)
-                except Exception:
-                    return s
-
-            for i in range(start, end):
-                d = rows[i]
-                values: List[str] = [getattr(d, "isoformat", lambda: str(d))()]
-                for sym in symbols:
-                    val = df.at[d, sym]
-                    if pd.isna(val):
-                        values.append("")
-                        continue
-                    try:
-                        num = float(val)
-                        dollars = math.ceil(num)
-                        text = f"${dollars:,}"
-                    except Exception:
-                        text = str(val)
-                    if max_idx.get(sym) == i:
-                        # Mark as ATH (cell only) with marker and underline
-                        text = underline_text(f"▲ {text}")
-                    values.append(text)
-                tags = ["odd" if (i % 2) else "even"]
-                tree.insert("", "end", values=values, tags=tags)
-            if end < len(rows):
-                try:
-                    show_status(f"Rendering journal... {end}/{len(rows)}", spinning=True)
-                except Exception:
-                    pass
-                parent.after(1, render_chunk, end)
-            else:
-                # Done
-                try:
-                    show_status("Journal ready", spinning=False)
-                    parent.after(1500, lambda: show_status("", spinning=False))
-                except Exception:
-                    pass
-
-                # Append separator row (blank) and summary row (since ATH)
-                try:
-                    sep_values = [""] * (1 + len(symbols))
-                    tree.insert("", "end", values=sep_values, tags=["even"])  # line break row
-
-                    last_row_values: List[str] = ["Since ATH"]
-                    last_date = rows[-1] if rows else None
-                    for sym in symbols:
-                        if sym not in ath_val or last_date is None:
-                            last_row_values.append("")
-                            continue
-                        try:
-                            days = (pd.to_datetime(last_date) - pd.to_datetime(ath_date[sym])).days
-                        except Exception:
-                            days = 0
-                        try:
-                            lv = float(last_val.get(sym, float("nan")))
-                            av = float(ath_val.get(sym, float("nan")))
-                            pct = 0.0 if not (av and av != 0) else ((lv / av) - 1.0) * 100.0
-                        except Exception:
-                            pct = 0.0
-                        cell = f"{days}d, {pct:+.2f}%"
-                        last_row_values.append(cell)
-                    tree.insert("", "end", values=last_row_values, tags=["odd"])  # summary row
-                except Exception:
-                    pass
-
-        parent.after(0, render_chunk, 0)
-
-    def poll_for_updates() -> None:
-        nonlocal last_mtime
-        try:
-            m = os.path.getmtime(journal_path) if os.path.exists(journal_path) else 0.0
-        except Exception:
-            m = last_mtime
-        if m > last_mtime:
-            last_mtime = m
-            refresh_grid()
-        # Poll occasionally; actual UI drawing is throttled inside refresh_grid
-        parent.after(1000, poll_for_updates)
-
-    def reload_and_refresh() -> None:
-        # Update highlight font if default changed (e.g., zoom)
-        try:
-            dfnt = tkfont.nametofont("TkDefaultFont")
-            highlight_font.configure(family=dfnt.cget("family"), size=dfnt.cget("size"))
-        except Exception:
-            pass
-        refresh_grid()
-
-    parent.bind("<<FontScaleChanged>>", lambda _e: reload_and_refresh())
-
-    # Initial content and polling (polling is idle unless tab becomes active)
-    show_status("Waiting to build journal...", spinning=False)
-    parent.after(1000, poll_for_updates)
-
-    # Expose refresh hook for tab change
-    setattr(parent, "_journal_refresh", reload_and_refresh)
-    def set_active(active: bool) -> None:
-        nonlocal journal_active
-        journal_active = active
-        if active:
-            # Trigger a refresh when becoming visible
-            refresh_grid()
-    setattr(parent, "_journal_set_active", set_active)
+	# Expose hooks
+	setattr(parent, "_journal_refresh", reload_and_refresh)
+	def set_active(active: bool) -> None:
+		nonlocal journal_active
+		journal_active = active
+		if active:
+			refresh_grid()
+	setattr(parent, "_journal_set_active", set_active)
 
 
 def register_journal_tab_handlers(notebook: ttk.Notebook, journal_frame: tk.Widget) -> None:
-    def on_tab_changed(_evt=None):  # noqa: ANN001
-        try:
-            current = notebook.select()
-            if current == str(journal_frame):
-                setter = getattr(journal_frame, "_journal_set_active", None)
-                if callable(setter):
-                    setter(True)
-                fn = getattr(journal_frame, "_journal_refresh", None)
-                if callable(fn):
-                    fn()
-            else:
-                setter = getattr(journal_frame, "_journal_set_active", None)
-                if callable(setter):
-                    setter(False)
-        except Exception:
-            pass
-    notebook.bind("<<NotebookTabChanged>>", on_tab_changed)
+	def on_tab_changed(_evt=None):  # noqa: ANN001
+		try:
+			current = notebook.select()
+			if current == str(journal_frame):
+				setter = getattr(journal_frame, "_journal_set_active", None)
+				if callable(setter):
+					setter(True)
+				fn = getattr(journal_frame, "_journal_refresh", None)
+				if callable(fn):
+					fn()
+			else:
+				setter = getattr(journal_frame, "_journal_set_active", None)
+				if callable(setter):
+					setter(False)
+		except Exception:
+			pass
+	notebook.bind("<<NotebookTabChanged>>", on_tab_changed)

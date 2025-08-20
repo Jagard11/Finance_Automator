@@ -68,6 +68,7 @@ def build_charts_ui(parent: tk.Widget) -> None:
     def apply_matplotlib_style(scale: float) -> None:
         base = 10 * scale
         matplotlib.rcParams.update({
+            "font.family": "Atkinson Hyperlegible",
             "axes.facecolor": "#1e1e1e",
             "figure.facecolor": "#121212",
             "savefig.facecolor": "#121212",

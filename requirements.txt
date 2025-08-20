@@ -2,3 +2,4 @@ pandas>=1.5
 matplotlib>=3.7
 yfinance>=0.2.40
 requests>=2.31
+tksheet>=6.4.0
