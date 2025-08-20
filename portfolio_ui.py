@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
+from tkinter import simpledialog
 from typing import Optional
 from datetime import datetime
 
@@ -36,6 +37,8 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
 
     holdings_list = tk.Listbox(left_frame, height=12)
     holdings_list.pack(fill="both", expand=True)
+
+    NEW_SYMBOL_LABEL = "--- New Symbol ---"
 
     # Events section
     right_frame = ttk.Frame(main_pane)
@@ -135,7 +138,7 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             selected_holding_symbol = symbol
         except IndexError:
             symbol = selected_holding_symbol
-        if not symbol:
+        if not symbol or symbol == NEW_SYMBOL_LABEL:
             return None
         return portfolio.get_holding(symbol)
 
@@ -168,6 +171,8 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
         symbols = [h.symbol for h in sorted(portfolio.holdings, key=lambda h: h.symbol)]
         for sym in symbols:
             holdings_list.insert(tk.END, sym)
+        # Append new symbol row
+        holdings_list.insert(tk.END, NEW_SYMBOL_LABEL)
         if symbols:
             if current_symbol in symbols:
                 idx = symbols.index(current_symbol)
@@ -491,9 +496,33 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             del holding.events[idx]
             refresh_events_list()
 
+    def on_holdings_double_click(evt) -> None:  # noqa: ANN001
+        # Double-clicking the "--- New Symbol ---" row prompts for a new symbol
+        index = holdings_list.nearest(evt.y)
+        try:
+            value = holdings_list.get(index)
+        except Exception:
+            return
+        if value != NEW_SYMBOL_LABEL:
+            return
+        sym = simpledialog.askstring("Add Symbol", "Enter symbol (e.g., AAPL):", parent=parent)
+        if not sym:
+            return
+        sym = sym.strip().upper().replace(" ", "")
+        if not sym:
+            return
+        if portfolio.get_holding(sym):
+            messagebox.showinfo("Already exists", f"{sym} is already in the portfolio.")
+            return
+        portfolio.ensure_holding(sym)
+        nonlocal selected_holding_symbol
+        selected_holding_symbol = sym
+        refresh_holdings_list()
+
     events_tree.bind("<Double-1>", on_tree_double_click)
     events_tree.bind("<Delete>", on_delete_key)
     holdings_list.bind("<<ListboxSelect>>", on_select_holding)
+    holdings_list.bind("<Double-1>", on_holdings_double_click)
 
     # Save controls
     bottom = ttk.Frame(parent)

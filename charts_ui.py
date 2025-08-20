@@ -2,12 +2,10 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import date, timedelta, datetime
 from typing import Optional, List, Tuple, Dict
-import os
 
 import matplotlib
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
-import pandas as pd
 
 from models import Portfolio, Holding
 import storage
@@ -21,7 +19,7 @@ def build_charts_ui(parent: tk.Widget) -> None:
     portfolio: Portfolio = storage.load_portfolio()
 
     # cache for ROI computations per symbol to keep UI snappy
-    roi_cache: Dict[str, Optional[float]] = {}
+    roi_cache: Dict[str, float] = {}
 
     # Figure font scaling factor; updated via virtual event
     font_scale = 1.0
@@ -120,6 +118,10 @@ def build_charts_ui(parent: tk.Widget) -> None:
             pass
         apply_matplotlib_style(font_scale)
         update_axes_fonts(ax, font_scale)
+        try:
+            fig.tight_layout()
+        except Exception:
+            pass
         canvas.draw_idle()
 
     parent.bind("<<FontScaleChanged>>", on_font_scale_changed)
@@ -168,20 +170,6 @@ def build_charts_ui(parent: tk.Widget) -> None:
         end = last_flat or date.today().isoformat()
         return start, end
 
-    def load_cached_close_series(symbol: str) -> Optional[pd.Series]:
-        cache_path = os.path.join(storage.default_data_dir(), "cache", f"{symbol.upper()}_prices.csv")
-        if not os.path.exists(cache_path):
-            return None
-        try:
-            df = pd.read_csv(cache_path, index_col=0, parse_dates=True)
-            if df is None or df.empty:
-                return None
-            if "Close" in df.columns:
-                return df["Close"]
-            return df.iloc[:, 0]
-        except Exception:
-            return None
-
     def compute_holding_return(holding: Holding) -> Optional[float]:
         # simple ROI: (last_close / first_close) - 1 over the holding date range
         sym = holding.symbol.upper()
@@ -189,30 +177,19 @@ def build_charts_ui(parent: tk.Widget) -> None:
             return roi_cache[sym]
         start, end = compute_date_range(holding)
         end_plus = (date.fromisoformat(end) + timedelta(days=1)).isoformat()
-        # Prefer cached data to avoid fetch lag
-        series = load_cached_close_series(sym)
-        if series is None:
-            df = fetch_price_history(sym, start, end_plus)
-            if df is None or df.empty:
-                roi_cache[sym] = None
-                return None
-            series = df["Close"] if "Close" in df.columns else df.iloc[:, 0]
-        # Filter to range and compute
+        df = fetch_price_history(sym, start, end_plus)
+        if df is None or df.empty:
+            roi_cache[sym] = None  # type: ignore[assignment]
+            return None
+        series = df["Close"] if "Close" in df.columns else df.iloc[:, 0]
         try:
-            s = series.dropna()
-            if isinstance(s.index, pd.DatetimeIndex):
-                s = s.loc[pd.to_datetime(start) : pd.to_datetime(end)]
-            vals = s.to_numpy()
-            if vals.size == 0:
-                roi_cache[sym] = None
-                return None
-            first_price = float(vals[0])
-            last_price = float(vals[-1])
+            first_price = float(series.dropna().iloc[0])
+            last_price = float(series.dropna().iloc[-1])
         except Exception:
-            roi_cache[sym] = None
+            roi_cache[sym] = None  # type: ignore[assignment]
             return None
         if first_price <= 0:
-            roi_cache[sym] = None
+            roi_cache[sym] = None  # type: ignore[assignment]
             return None
         roi = (last_price / first_price) - 1.0
         roi_cache[sym] = roi
@@ -272,6 +249,10 @@ def build_charts_ui(parent: tk.Widget) -> None:
         ax.grid(True, color="#333333", linestyle="--", linewidth=0.5)
         for spine in ax.spines.values():
             spine.set_color("#666666")
+        try:
+            fig.tight_layout()
+        except Exception:
+            pass
         canvas.draw()
 
     def find_holding(symbol: str) -> Optional[Holding]:
@@ -310,6 +291,10 @@ def build_charts_ui(parent: tk.Widget) -> None:
         for spine in ax.spines.values():
             spine.set_color("#666666")
         update_axes_fonts(ax, font_scale)
+        try:
+            fig.tight_layout()
+        except Exception:
+            pass
         canvas.draw()
 
     symbols_list.bind("<<ListboxSelect>>", lambda _e: plot_selected())
