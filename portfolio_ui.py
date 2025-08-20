@@ -570,6 +570,9 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             return f"${p}"
 
     def _get_last_and_prev_price(symbol: str) -> tuple[float | None, float | None]:
+        # Authoritative source: values_cache; if missing/incomplete, mark dirty and warm.
+        last: float | None = None
+        prev: float | None = None
         try:
             vdf = read_values_cache(symbol)
             if vdf is not None and not vdf.empty:
@@ -582,39 +585,26 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
                     last_row = vdf.iloc[-1]
                     s_last = float(last_row["shares"]) if float(last_row["shares"]) > 0 else None
                     last = (float(last_row["value"]) / s_last) if s_last else None
-                else:
-                    last = None
                 if len(vdf) >= 2:
                     prev_row = vdf.iloc[-2]
                     s_prev = float(prev_row["shares"]) if float(prev_row["shares"]) > 0 else None
                     prev = (float(prev_row["value"]) / s_prev) if s_prev else None
-                else:
-                    prev = None
-                if last is None or prev is None:
-                    # Ensure caches are rebuilt rather than using any fallback
-                    try:
-                        mark_symbol_dirty(symbol)
-                        q = get_task_queue()
-                        if q is not None:
-                            q.put_nowait({"type": "warm_values"})
-                        # Notify other tabs
-                        try:
-                            parent.event_generate("<<PortfolioChanged>>", when="tail")
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
-                return last, prev
         except Exception:
-            pass
-        try:
-            mark_symbol_dirty(symbol)
-            q = get_task_queue()
-            if q is not None:
-                q.put_nowait({"type": "warm_values"})
-        except Exception:
-            pass
-        return None, None
+            last = last
+            prev = prev
+        if last is None or prev is None:
+            try:
+                mark_symbol_dirty(symbol)
+                q = get_task_queue()
+                if q is not None:
+                    q.put_nowait({"type": "warm_values"})
+                try:
+                    parent.event_generate("<<PortfolioChanged>>", when="tail")
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        return last, prev
 
     def refresh_events_list() -> None:
         # Remember selection
