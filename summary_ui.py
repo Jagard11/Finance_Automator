@@ -61,6 +61,7 @@ def build_summary_ui(parent: tk.Widget) -> None:
 
     # Price cache per symbol
     last_price_cache: Dict[str, Optional[float]] = {}
+    day_prices_cache: Dict[str, Tuple[Optional[float], Optional[float]]] = {}
 
     # Top metrics
     top = ttk.Frame(parent)
@@ -80,10 +81,17 @@ def build_summary_ui(parent: tk.Widget) -> None:
     big_font = base_font.copy()
     big_font.configure(size=int(base_font.cget("size")) + 10, weight="bold")
 
-    total_value_label = tk.Label(metrics, text="Profit: $-", font=big_font, fg="#2ecc71", padx=8)
-    total_value_label.pack(side="left", padx=(0, 8))
+    leftcol = ttk.Frame(metrics)
+    leftcol.pack(side="left", padx=(0, 16))
+    total_value_label = tk.Label(leftcol, text="Profit: $-", font=big_font, fg="#2ecc71", padx=8)
+    total_value_label.pack(anchor="w")
+    day_profit_big = tk.Label(leftcol, text="Day Profit: $-", font=big_font, fg="#cccccc", padx=8)
+    day_profit_big.pack(anchor="w")
+
     roi_subtext = tk.Label(metrics, text="ROI: -", padx=4)
     roi_subtext.pack(side="left", padx=(0, 8))
+    day_gain_pct_header = tk.Label(metrics, text="Day %: -", padx=4)
+    day_gain_pct_header.pack(side="left", padx=(0, 8))
     total_value_subtext = tk.Label(metrics, text="Total: -", padx=4)
     total_value_subtext.pack(side="left", padx=(0, 16))
 
@@ -91,28 +99,34 @@ def build_summary_ui(parent: tk.Widget) -> None:
     ttk.Label(metrics, textvariable=lbl_dividends).pack(side="left", padx=(0, 16))
 
     # Symbols table
-    columns = ("symbol", "shares", "last_price", "value", "cost", "roi", "start", "last")
+    columns = ("symbol", "shares", "last_price", "value", "cost", "avg_cost", "day_gain", "day_gain_pct", "roi", "start", "last")
     tree = ttk.Treeview(parent, columns=columns, show="headings", selectmode="browse")
     tree.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
-    tree.heading("symbol", text="Symbol")
-    tree.heading("shares", text="Shares")
-    tree.heading("last_price", text="Last Price")
-    tree.heading("value", text="Value")
-    tree.heading("cost", text="Cost Basis")
-    tree.heading("roi", text="ROI")
-    tree.heading("start", text="First Event")
-    tree.heading("last", text="Last Event")
+    tree.heading("symbol", text="Symbol", anchor="center")
+    tree.heading("shares", text="Shares", anchor="center")
+    tree.heading("last_price", text="Price", anchor="center")
+    tree.heading("value", text="Value", anchor="center")
+    tree.heading("cost", text="Cost", anchor="center")
+    tree.heading("avg_cost", text="Avg/Sh", anchor="center")
+    tree.heading("day_gain", text="Day $", anchor="center")
+    tree.heading("day_gain_pct", text="Day %", anchor="center")
+    tree.heading("roi", text="ROI", anchor="center")
+    tree.heading("start", text="First", anchor="center")
+    tree.heading("last", text="Last", anchor="center")
 
     # Initial widths (auto-adjust on font scale change)
-    tree.column("symbol", width=100, anchor="w")
-    tree.column("shares", width=100, anchor="e")
-    tree.column("last_price", width=100, anchor="e")
-    tree.column("value", width=120, anchor="e")
-    tree.column("cost", width=120, anchor="e")
-    tree.column("roi", width=90, anchor="e")
-    tree.column("start", width=120, anchor="w")
-    tree.column("last", width=120, anchor="w")
+    tree.column("symbol", width=80, anchor="center")
+    tree.column("shares", width=70, anchor="center")
+    tree.column("last_price", width=90, anchor="center")
+    tree.column("value", width=110, anchor="center")
+    tree.column("cost", width=110, anchor="center")
+    tree.column("avg_cost", width=110, anchor="center")
+    tree.column("day_gain", width=110, anchor="center")
+    tree.column("day_gain_pct", width=90, anchor="center")
+    tree.column("roi", width=90, anchor="center")
+    tree.column("start", width=110, anchor="center")
+    tree.column("last", width=110, anchor="center")
 
     def auto_size_columns() -> None:
         try:
@@ -120,18 +134,24 @@ def build_summary_ui(parent: tk.Widget) -> None:
             f = tkfont.nametofont("TkDefaultFont")
             def ch(n: int) -> int:
                 return int(n * max(6, f.measure("0")) / 1.6)
-            tree.column("symbol", width=ch(10))
-            tree.column("shares", width=ch(10))
-            tree.column("last_price", width=ch(10))
-            tree.column("value", width=ch(12))
-            tree.column("cost", width=ch(12))
+            tree.column("symbol", width=ch(8))
+            tree.column("shares", width=ch(6))
+            tree.column("last_price", width=ch(8))
+            tree.column("value", width=ch(10))
+            tree.column("cost", width=ch(10))
+            tree.column("avg_cost", width=ch(10))
+            tree.column("day_gain", width=ch(10))
+            tree.column("day_gain_pct", width=ch(8))
             tree.column("roi", width=ch(8))
-            tree.column("start", width=ch(12))
-            tree.column("last", width=ch(12))
+            tree.column("start", width=ch(10))
+            tree.column("last", width=ch(10))
         except Exception:
             pass
 
     parent.bind("<<FontScaleChanged>>", lambda _e: auto_size_columns())
+
+    # Note: Per-cell coloring isn't supported natively by ttk.Treeview.
+    # We avoid row-level coloring to keep the table uncluttered.
 
     # Sorting state
     sort_col = "symbol"
@@ -170,6 +190,52 @@ def build_summary_ui(parent: tk.Widget) -> None:
         last_price_cache[symbol] = price
         return price
 
+    def day_prices(symbol: str) -> Tuple[Optional[float], Optional[float]]:
+        # Returns (previous_close, last_close)
+        if symbol in day_prices_cache:
+            return day_prices_cache[symbol]
+        prev: Optional[float] = None
+        last: Optional[float] = None
+        # Prefer values cache derived prices (same as last_price logic)
+        try:
+            vdf = read_values_cache(symbol)
+            if vdf is not None and not vdf.empty:
+                vdf = vdf.copy()
+                vdf.sort_values("date", inplace=True)
+                vdf["shares"] = pd.to_numeric(vdf.get("shares"), errors="coerce")
+                vdf["value"] = pd.to_numeric(vdf.get("value"), errors="coerce")
+                vdf = vdf[(vdf["shares"] > 0) & (~vdf["value"].isna())]
+                if len(vdf) >= 1:
+                    last_row = vdf.iloc[-1]
+                    s_last = float(last_row["shares"]) if float(last_row["shares"]) > 0 else None
+                    if s_last is not None:
+                        last = float(last_row["value"]) / s_last
+                if len(vdf) >= 2:
+                    prev_row = vdf.iloc[-2]
+                    s_prev = float(prev_row["shares"]) if float(prev_row["shares"]) > 0 else None
+                    if s_prev is not None:
+                        prev = float(prev_row["value"]) / s_prev
+        except Exception:
+            prev = prev
+            last = last
+        # Fallback to local price history cache if needed
+        if prev is None or last is None:
+            try:
+                end = date.today()
+                start = end - timedelta(days=14)
+                df = fetch_price_history(symbol, start.isoformat(), (end + timedelta(days=1)).isoformat(), avoid_network=True)
+                if df is not None and not df.empty:
+                    series = df["Close"] if "Close" in df.columns else df.iloc[:, 0]
+                    s = series.dropna()
+                    if last is None and len(s) >= 1:
+                        last = float(s.iloc[-1])
+                    if prev is None and len(s) >= 2:
+                        prev = float(s.iloc[-2])
+            except Exception:
+                pass
+        day_prices_cache[symbol] = (prev, last)
+        return prev, last
+
     def recompute_and_fill() -> None:
         # Clear rows
         for iid in tree.get_children():
@@ -179,6 +245,8 @@ def build_summary_ui(parent: tk.Widget) -> None:
         total_div = 0.0
 
         rows: List[Tuple] = []
+        portfolio_day_gain_total = 0.0
+        portfolio_prev_value_total = 0.0
         for holding in portfolio.holdings:
             sym = holding.symbol
             shares = _shares_held(holding)
@@ -189,9 +257,30 @@ def build_summary_ui(parent: tk.Widget) -> None:
             roi = None
             if cost and cost != 0:
                 roi = (value - cost) / cost
-            rows.append((sym, shares, lp, value, cost, roi, start_dt, last_dt))
+            avg_cost = None
+            if shares and shares > 0:
+                try:
+                    avg_cost = max(0.0, cost) / shares
+                except Exception:
+                    avg_cost = None
+            prev_close, last_close = day_prices(sym)
+            day_gain_val: Optional[float] = None
+            day_gain_pct: Optional[float] = None
+            try:
+                if prev_close is not None and last_close is not None and shares is not None and shares > 0:
+                    day_gain_val = (last_close - prev_close) * shares
+                if prev_close is not None and prev_close != 0 and last_close is not None:
+                    day_gain_pct = (last_close - prev_close) / prev_close
+            except Exception:
+                day_gain_val = None
+                day_gain_pct = None
+            rows.append((sym, shares, lp, value, cost, avg_cost, day_gain_val, day_gain_pct, roi, start_dt, last_dt))
             total_value += value
             total_cost += max(0.0, cost)
+            if day_gain_val is not None:
+                portfolio_day_gain_total += day_gain_val
+            if prev_close is not None and shares is not None and shares > 0:
+                portfolio_prev_value_total += prev_close * shares
         # Dividends total: include cash events and reinvested (holding-level) dividends
         for ev in portfolio.cash_events:
             if ev.type == EventType.DIVIDEND:
@@ -209,21 +298,27 @@ def build_summary_ui(parent: tk.Widget) -> None:
                 "last_price": row[2] if row[2] is not None else -1e18,
                 "value": row[3],
                 "cost": row[4],
-                "roi": row[5] if row[5] is not None else -1e18,
-                "start": row[6],
-                "last": row[7],
+                "avg_cost": row[5] if row[5] is not None else -1e18,
+                "day_gain": row[6] if row[6] is not None else -1e18,
+                "day_gain_pct": row[7] if row[7] is not None else -1e18,
+                "roi": row[8] if row[8] is not None else -1e18,
+                "start": row[9],
+                "last": row[10],
             }
             return (mapping.get(sort_col), row[0])
 
         rows.sort(key=sort_key, reverse=sort_reverse)
 
-        for sym, shares, lp, value, cost, roi, start_dt, last_dt in rows:
+        for sym, shares, lp, value, cost, avg_cost, day_gain_val, day_gain_pct, roi, start_dt, last_dt in rows:
             tree.insert("", "end", iid=sym, values=(
                 sym,
                 f"{shares:g}",
                 ("-" if lp is None else f"${math.ceil(lp):,}"),
                 f"${math.ceil(value):,}",
                 f"${math.ceil(cost):,}",
+                ("-" if (avg_cost is None or shares <= 0) else f"${math.ceil(avg_cost):,}"),
+                ("-" if day_gain_val is None else f"${math.ceil(day_gain_val):,}"),
+                ("-" if day_gain_pct is None else f"{day_gain_pct*100:.2f}%"),
                 ("-" if roi is None else f"{roi*100:.2f}%"),
                 start_dt,
                 last_dt,
@@ -240,6 +335,17 @@ def build_summary_ui(parent: tk.Widget) -> None:
         total_value_subtext.config(text=f"Total: ${math.ceil(total_value):,}")
         lbl_total_cost.set(f"Cost: ${math.ceil(total_cost):,}")
         lbl_dividends.set(f"Dividends: ${math.ceil(total_div):,}")
+
+        # Daily portfolio gain in header
+        day_color = "#cccccc"
+        if portfolio_prev_value_total > 0:
+            day_color = "#2ecc71" if portfolio_day_gain_total >= 0 else "#e74c3c"
+            day_gain_pct_port = portfolio_day_gain_total / portfolio_prev_value_total
+            day_profit_big.config(text=f"Day Profit: ${math.ceil(portfolio_day_gain_total):,}", fg=day_color)
+            day_gain_pct_header.config(text=f"Day %: {day_gain_pct_port*100:.2f}%", fg=day_color)
+        else:
+            day_profit_big.config(text="Day Profit: -", fg=day_color)
+            day_gain_pct_header.config(text="Day %: -", fg=day_color)
 
         auto_size_columns()
 
