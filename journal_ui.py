@@ -12,6 +12,7 @@ import math
 import storage
 from models import Portfolio
 from journal_builder import journal_csv_path, rebuild_journal_in_background
+import settings
 
 
 def build_journal_ui(parent: tk.Widget) -> None:
@@ -113,6 +114,56 @@ def build_journal_ui(parent: tk.Widget) -> None:
 	))
 	sheet.grid(row=0, column=0, sticky="nsew")
 
+	# Persist and restore column widths
+	def _apply_saved_layout() -> None:
+		try:
+			s = settings.load_settings()
+			tab = s.get("journal", {})
+			saved = tab.get("columns", [])
+			if isinstance(saved, list) and saved:
+				for c, w in enumerate(saved):
+					try:
+						w_int = int(w)
+						if w_int > 0:
+							sheet.column_width(c, width=w_int)
+					except Exception:
+						continue
+		except Exception:
+			pass
+
+	def _save_state() -> None:
+		try:
+			s = settings.load_settings()
+			tab = dict(s.get("journal", {}))
+			widths: List[int] = []
+			try:
+				ncols = sheet.total_columns()
+			except Exception:
+				ncols = 0
+			for c in range(ncols):
+				w = None
+				try:
+					# Prefer explicit getter if available
+					w = int(sheet.get_column_width(c))
+				except Exception:
+					try:
+						# Fallback: column_width can also return current width if width is None in some versions
+						w = int(sheet.column_width(c))  # type: ignore[misc]
+					except Exception:
+						w = None
+				if isinstance(w, int) and w > 0:
+					widths.append(w)
+			tab["columns"] = widths
+			s["journal"] = tab
+			settings.save_settings(s)
+		except Exception:
+			pass
+
+	try:
+		parent.bind_all("<<PersistUIState>>", lambda _e: _save_state())
+	except Exception:
+		pass
+
 	journal_path = journal_csv_path()
 	last_mtime = os.path.getmtime(journal_path) if os.path.exists(journal_path) else 0.0
 	last_refresh = 0.0
@@ -170,6 +221,8 @@ def build_journal_ui(parent: tk.Widget) -> None:
 		# Set headers and data
 		sheet.headers(["date"] + symbols)
 		sheet.set_sheet_data(data, reset_highlights=True, redraw=False)
+		# Apply saved layout now that columns exist
+		_apply_saved_layout()
 		nrows = len(data)
 		# Center align headers and columns
 		for c in range(len(symbols) + 1):

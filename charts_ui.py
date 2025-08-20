@@ -14,7 +14,7 @@ from models import Portfolio, Holding
 import storage
 from market_data import fetch_price_history
 from values_cache import read_values_cache
-from settings import vprint
+from settings import vprint, load_settings, save_settings
 import pandas as pd
 
 
@@ -279,15 +279,26 @@ def build_charts_ui(parent: tk.Widget) -> None:
             return ordered
         return sorted(syms)
 
+    # Remember last selected symbol between sessions
     def refresh_symbols() -> None:
         symbols_list.delete(0, tk.END)
         for sym in sorted_symbols():
             symbols_list.insert(tk.END, sym)
-        # select first and plot
+        # select last used symbol if available, else first
         if symbols_list.size() > 0:
-            symbols_list.selection_clear(0, tk.END)
-            symbols_list.selection_set(0)
-            symbols_list.activate(0)
+            try:
+                s = load_settings()
+                last = (s.get("charts", {}) or {}).get("last_symbol")
+                idx = 0
+                if isinstance(last, str) and last:
+                    syms = [symbols_list.get(i) for i in range(symbols_list.size())]
+                    if last in syms:
+                        idx = syms.index(last)
+                symbols_list.selection_clear(0, tk.END)
+                symbols_list.selection_set(idx)
+                symbols_list.activate(idx)
+            except Exception:
+                pass
             plot_selected()
         else:
             clear_chart()
@@ -321,6 +332,15 @@ def build_charts_ui(parent: tk.Widget) -> None:
             clear_chart()
             return
         symbol = symbols_list.get(idx)
+        # Persist last selected symbol
+        try:
+            s = load_settings()
+            tab = dict(s.get("charts", {}))
+            tab["last_symbol"] = symbol
+            s["charts"] = tab
+            save_settings(s)
+        except Exception:
+            pass
         holding = find_holding(symbol)
         if holding is None:
             clear_chart()
@@ -435,6 +455,15 @@ def build_charts_ui(parent: tk.Widget) -> None:
     apply_matplotlib_style(font_scale)
     reload_portfolio()
 
+    # Restore left/right pane divider position
+    try:
+        s = load_settings()
+        sash = int((s.get("charts", {}) or {}).get("sash0", 0))
+        if sash > 0:
+            parent.after(0, lambda: main_pane.sashpos(0, sash))
+    except Exception:
+        pass
+
     # Expose a hook on the parent so external code can trigger a refresh/plot
     setattr(parent, "_charts_refresh_and_plot", lambda: (reload_portfolio(),))
 
@@ -457,3 +486,22 @@ def register_charts_tab_handlers(notebook: ttk.Notebook, charts_frame: tk.Widget
         except Exception:
             pass
     notebook.bind("<<NotebookTabChanged>>", on_tab_changed)
+    # Persist sash position when requested
+    def save_state() -> None:
+        try:
+            s = load_settings()
+            tab = dict(s.get("charts", {}))
+            try:
+                main_pane = charts_frame.winfo_children()[0]
+                if isinstance(main_pane, ttk.PanedWindow):
+                    tab["sash0"] = int(main_pane.sashpos(0))
+            except Exception:
+                pass
+            s["charts"] = tab
+            save_settings(s)
+        except Exception:
+            pass
+    try:
+        charts_frame.bind_all("<<PersistUIState>>", lambda _e: save_state())
+    except Exception:
+        pass

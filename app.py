@@ -10,6 +10,7 @@ from charts_ui import build_charts_ui, register_charts_tab_handlers
 from summary_ui import build_summary_ui, register_summary_tab_handlers
 from journal_ui import build_journal_ui, register_journal_tab_handlers
 from theme import apply_dark_theme
+import settings
 from startup_tasks import run_startup_tasks_in_background, get_progress_queue
 from settings import VERBOSE
 
@@ -17,7 +18,20 @@ from settings import VERBOSE
 def main() -> None:
     root = tk.Tk()
     root.title("Finance Automator")
-    root.geometry("1100x800")
+    # Restore window geometry if saved
+    try:
+        s = settings.load_settings()
+        geo = None
+        try:
+            geo = s.get("window", {}).get("geometry")
+        except Exception:
+            geo = None
+        if isinstance(geo, str) and geo:
+            root.geometry(geo)
+        else:
+            root.geometry("1100x800")
+    except Exception:
+        root.geometry("1100x800")
 
     scaler = apply_dark_theme(root)
 
@@ -188,7 +202,42 @@ def main() -> None:
     # Ensure Summary is default selected tab
     notebook.select(summary_frame)
 
+    # Persist window geometry on close
+    def on_close() -> None:
+        # Ask all tabs to persist their UI state, then save geometry and quit on idle
+        try:
+            root.event_generate("<<PersistUIState>>", when="tail")
+        except Exception:
+            pass
+
+        def _save_and_quit() -> None:
+            try:
+                geo = root.geometry()
+                # Merge into latest settings to avoid clobbering state saved by tabs
+                s = settings.load_settings()
+                wnd = dict(s.get("window", {}))
+                wnd["geometry"] = geo
+                s["window"] = wnd
+                settings.save_settings(s)
+            except Exception:
+                pass
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
+        try:
+            root.after_idle(_save_and_quit)
+        except Exception:
+            _save_and_quit()
+
+    try:
+        root.protocol("WM_DELETE_WINDOW", on_close)
+    except Exception:
+        pass
+
     root.mainloop()
+    
 
 
 if __name__ == "__main__":

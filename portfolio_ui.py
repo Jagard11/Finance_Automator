@@ -10,6 +10,7 @@ from models import Portfolio, Holding, Event, EventType
 import storage
 from values_cache import mark_symbol_dirty, read_values_cache
 from startup_tasks import get_task_queue
+import settings
 
 
 def build_portfolio_ui(parent: tk.Widget) -> None:
@@ -186,6 +187,60 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             pass
 
     parent.bind("<<FontScaleChanged>>", lambda _e: auto_size_columns())
+
+    # Apply saved layout (sash position and column widths)
+    def apply_saved_layout() -> None:
+        try:
+            s = settings.load_settings()
+            tab = s.get("portfolio", {})
+            # Sash position
+            try:
+                sash = int(tab.get("sash0", 0))
+                if sash > 0:
+                    parent.after(0, lambda: main_pane.sashpos(0, sash))
+            except Exception:
+                pass
+            # Column widths
+            try:
+                saved_cols = tab.get("columns", {})
+                if isinstance(saved_cols, dict):
+                    for col_id in columns:
+                        try:
+                            w = int(saved_cols.get(col_id, 0))
+                            if w > 0:
+                                events_tree.column(col_id, width=w)
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    # Persist layout on request
+    def save_state() -> None:
+        try:
+            s = settings.load_settings()
+            tab = dict(s.get("portfolio", {}))
+            try:
+                tab["sash0"] = int(main_pane.sashpos(0))
+            except Exception:
+                pass
+            col_widths = {}
+            for col_id in columns:
+                try:
+                    col_widths[col_id] = int(events_tree.column(col_id, "width"))
+                except Exception:
+                    continue
+            tab["columns"] = col_widths
+            s["portfolio"] = tab
+            settings.save_settings(s)
+        except Exception:
+            pass
+
+    try:
+        parent.bind_all("<<PersistUIState>>", lambda _e: save_state())
+    except Exception:
+        pass
 
     # Helpers: date parsing/formatting and sorting
     def parse_date_for_sorting(date_str: str) -> tuple[int, int, int]:
@@ -835,5 +890,7 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
 
     # Initial population and selection
     refresh_holdings_list()
+    # Apply saved layout after first render
+    apply_saved_layout()
     # Start polling for external changes (e.g., background dividend ingestion)
     parent.after(2000, poll_for_changes)

@@ -10,6 +10,7 @@ import storage
 from market_data import fetch_price_history
 from values_cache import read_values_cache
 import pandas as pd
+import settings
 
 
 def _normalize_date(date_str: str) -> str:
@@ -152,6 +153,45 @@ def build_summary_ui(parent: tk.Widget) -> None:
             pass
 
     parent.bind("<<FontScaleChanged>>", lambda _e: auto_size_columns())
+
+    # Restore saved column widths
+    def apply_saved_layout() -> None:
+        try:
+            s = settings.load_settings()
+            tab = s.get("summary", {})
+            saved_cols = tab.get("columns", {})
+            if isinstance(saved_cols, dict):
+                for col_id in columns:
+                    try:
+                        w = int(saved_cols.get(col_id, 0))
+                        if w > 0:
+                            tree.column(col_id, width=w)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+    # Persist column widths when requested
+    def save_state() -> None:
+        try:
+            s = settings.load_settings()
+            tab = dict(s.get("summary", {}))
+            col_widths = {}
+            for col_id in columns:
+                try:
+                    col_widths[col_id] = int(tree.column(col_id, "width"))
+                except Exception:
+                    continue
+            tab["columns"] = col_widths
+            s["summary"] = tab
+            settings.save_settings(s)
+        except Exception:
+            pass
+
+    try:
+        parent.bind_all("<<PersistUIState>>", lambda _e: save_state())
+    except Exception:
+        pass
 
     # Note: Per-cell coloring isn't supported natively by ttk.Treeview.
     # We avoid row-level coloring to keep the table uncluttered.
@@ -387,6 +427,7 @@ def build_summary_ui(parent: tk.Widget) -> None:
 
     # Initial load
     reload_and_refresh()
+    apply_saved_layout()
 
     # Expose refresh hook for tab change
     setattr(parent, "_summary_refresh", reload_and_refresh)
