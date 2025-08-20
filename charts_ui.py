@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
+import webbrowser
 from datetime import date, timedelta, datetime
 from typing import Optional, List, Tuple, Dict
 
@@ -73,6 +74,176 @@ def build_charts_ui(parent: tk.Widget) -> None:
     ref_entry.pack(side="left", padx=(4, 4))
     ref_enable_var = tk.BooleanVar(value=False)
     ttk.Checkbutton(ref_row, text="Show", variable=ref_enable_var, command=lambda: plot_selected()).pack(side="left")
+
+    # Plot mode state (UI is created beside the chart below)
+    mode_var = tk.StringVar(value="price")
+    try:
+        chs = load_settings().get("charts", {})
+        if isinstance(chs, dict) and chs.get("mode") in {"price", "perf"}:
+            mode_var.set(str(chs.get("mode")))
+    except Exception:
+        pass
+    def _on_mode_changed() -> None:
+        try:
+            s = load_settings()
+            ch = dict(s.get("charts", {}))
+            ch["mode"] = mode_var.get()
+            s["charts"] = ch
+            save_settings(s)
+        except Exception:
+            pass
+        plot_selected()
+
+    # Header above chart with company name, price, change, status, and link (mirrors Portfolio tab)
+    header = ttk.Frame(right)
+    header.pack(fill="x", padx=8, pady=(0, 8))
+    try:
+        header.columnconfigure(0, weight=1)
+        header.columnconfigure(1, weight=0)
+    except Exception:
+        pass
+    left_col = ttk.Frame(header)
+    try:
+        left_col.grid(row=0, column=0, sticky="w")
+    except Exception:
+        pass
+    company_var = tk.StringVar(value="")
+    company_label = ttk.Label(left_col, textvariable=company_var)
+    company_label.pack(anchor="w")
+    price_row = ttk.Frame(left_col)
+    price_row.pack(anchor="w")
+    price_var = tk.StringVar(value="")
+    change_var = tk.StringVar(value="")
+    # Fonts for price and change (large and half-size-ish)
+    try:
+        from tkinter import font as tkfont  # local import
+        heading_font = tkfont.nametofont("TkHeadingFont")
+        price_font = heading_font.copy(); price_font.configure(size=max(10, int(heading_font.cget("size") * 2)))
+        change_font = heading_font.copy(); change_font.configure(size=max(8, int(heading_font.cget("size"))))
+    except Exception:
+        price_font = None
+        change_font = None
+    price_label = ttk.Label(price_row, textvariable=price_var)
+    if price_font is not None:
+        price_label.configure(font=price_font)
+    price_label.pack(side="left")
+    change_label = ttk.Label(price_row, textvariable=change_var)
+    if change_font is not None:
+        change_label.configure(font=change_font)
+    change_label.pack(side="left", padx=(8, 0))
+    status_var = tk.StringVar(value="")
+    status_label = ttk.Label(left_col, textvariable=status_var)
+    status_label.pack(anchor="w")
+    link_label = ttk.Label(left_col, text="View on Yahoo Finance", foreground="#0a84ff", cursor="hand2")
+    link_label.pack(anchor="w")
+    def _open_symbol_link() -> None:
+        try:
+            sel = symbols_list.get(symbols_list.curselection()[0]) if symbols_list.curselection() else ""
+        except Exception:
+            sel = ""
+        try:
+            if sel:
+                webbrowser.open_new_tab(f"https://finance.yahoo.com/quote/{sel}")
+        except Exception:
+            pass
+    link_label.bind("<Button-1>", lambda _e: _open_symbol_link())
+
+    def _is_after_close_eastern() -> bool:
+        try:
+            from zoneinfo import ZoneInfo
+            now = datetime.now(ZoneInfo("America/New_York"))
+        except Exception:
+            now = datetime.now()
+        if now.weekday() >= 5:
+            return True
+        return (now.hour, now.minute) >= (16, 0)
+
+    _company_name_cache: Dict[str, str] = {}
+    def _get_company_name(sym: str) -> str:
+        s = (sym or "").upper()
+        if not s:
+            return ""
+        if s in _company_name_cache:
+            return _company_name_cache[s]
+        name = ""
+        try:
+            import yfinance as yf  # type: ignore
+            info = getattr(yf.Ticker(s), "info", None)
+            if isinstance(info, dict):
+                name = (info.get("longName") or info.get("shortName") or "").strip()
+        except Exception:
+            name = ""
+        if not name:
+            name = s
+        _company_name_cache[s] = name
+        return name
+
+    def update_header_for_symbol(sym: Optional[str], last: Optional[float] = None, prev: Optional[float] = None) -> None:
+        s = (sym or "").upper()
+        if not s:
+            company_var.set("")
+            price_var.set("")
+            change_var.set("")
+            status_var.set("")
+            return
+        company_name = _get_company_name(s)
+        company_var.set(f"{company_name} ({s})")
+        if last is None or prev is None:
+            # Use provided values only; no cache here to avoid overhead
+            pass
+        if last is None:
+            price_var.set("")
+            change_var.set("")
+        else:
+            try:
+                price_var.set(f"{last:,.2f}")
+            except Exception:
+                price_var.set(str(last))
+            if prev is not None and prev != 0:
+                try:
+                    diff = last - prev
+                    pct = (last / prev - 1.0) * 100.0
+                except Exception:
+                    diff = 0.0
+                    pct = 0.0
+                sign = "+" if diff > 0 else ""
+                try:
+                    change_var.set(f"{sign}{diff:,.2f} ({pct:+.2f}%)")
+                except Exception:
+                    change_var.set(f"{sign}{diff} ({pct:+.2f}%)")
+                try:
+                    change_label.configure(foreground=("#ef5350" if diff < 0 else ("#4caf50" if diff > 0 else "")))
+                except Exception:
+                    pass
+            else:
+                change_var.set("")
+        status_var.set("At close" if _is_after_close_eastern() else "")
+
+    def _recalc_header_fonts() -> None:
+        try:
+            from tkinter import font as tkfont
+            heading_font2 = tkfont.nametofont("TkHeadingFont")
+            pf = heading_font2.copy(); pf.configure(size=max(10, int(heading_font2.cget("size") * 2)))
+            cf = heading_font2.copy(); cf.configure(size=max(8, int(heading_font2.cget("size"))))
+            price_label.configure(font=pf)
+            change_label.configure(font=cf)
+        except Exception:
+            pass
+
+    # Radio buttons within the header row on the right side
+    try:
+        style = ttk.Style()
+        style.configure("Mode.TRadiobutton", background="#121212", foreground="#ffffff")
+        style.map("Mode.TRadiobutton", background=[("active", "#2a2a2a")], foreground=[("disabled", "#777777")])
+    except Exception:
+        pass
+    header_mode_col = ttk.Frame(header)
+    try:
+        header_mode_col.grid(row=0, column=1, sticky="ne")
+    except Exception:
+        header_mode_col.pack(side="right", anchor="ne")
+    ttk.Radiobutton(header_mode_col, text="Price over time", value="price", variable=mode_var, command=_on_mode_changed, style="Mode.TRadiobutton").pack(anchor="e")
+    ttk.Radiobutton(header_mode_col, text="Performance over time", value="perf", variable=mode_var, command=_on_mode_changed, style="Mode.TRadiobutton").pack(anchor="e")
 
     # Figure area with dark style
     def apply_matplotlib_style(scale: float) -> None:
@@ -213,6 +384,10 @@ def build_charts_ui(parent: tk.Widget) -> None:
         parent.bind_all("<<FontScaleChanged>>", on_font_scale_changed)
     except Exception:
         parent.bind("<<FontScaleChanged>>", on_font_scale_changed)
+    try:
+        parent.bind_all("<<FontScaleChanged>>", lambda _e: _recalc_header_fonts())
+    except Exception:
+        pass
 
     def normalize_date(date_str: str) -> str:
         s = (date_str or "").strip()
@@ -404,6 +579,74 @@ def build_charts_ui(parent: tk.Widget) -> None:
                 return h
         return None
 
+    def compute_symbol_value_series(holding: Holding, start_iso: str, end_iso: str) -> Optional[pd.Series]:
+        sym = holding.symbol
+        # First try values_cache which already contains per-day value and shares
+        try:
+            vdf = read_values_cache(sym)
+        except Exception:
+            vdf = None
+        if vdf is not None and not vdf.empty:
+            try:
+                v = vdf.copy()
+                start_dt = pd.to_datetime(start_iso); end_dt = pd.to_datetime(end_iso)
+                if hasattr(v["date"], "dt"):
+                    try:
+                        v["date"] = v["date"].dt.tz_localize(None)
+                    except Exception:
+                        pass
+                mask = (v["date"] >= start_dt) & (v["date"] <= end_dt)
+                v = v.loc[mask]
+                v.set_index("date", inplace=True)
+                shares = pd.to_numeric(v.get("shares"), errors="coerce")
+                values = pd.to_numeric(v.get("value"), errors="coerce")
+                series = values.where((shares > 0) & (~values.isna()))
+                series = series.fillna(0.0)
+                series = series.astype(float)
+                series = series.sort_index()
+                return series
+            except Exception:
+                pass
+        # Fallback: compute from price history and event shares
+        try:
+            end_plus = (date.fromisoformat(end_iso) + timedelta(days=1)).isoformat()
+            dfp = fetch_price_history(sym, start_iso, end_plus, avoid_network=True)
+            if dfp is None or dfp.empty:
+                return None
+            price_series = dfp["Close"] if "Close" in dfp.columns else (dfp["Adj Close"] if "Adj Close" in dfp.columns else dfp.iloc[:, 0])
+            idx = pd.to_datetime(price_series.index, errors="coerce"); idx = idx.tz_localize(None) if hasattr(idx, "tz_localize") else idx
+            mask = ~idx.isna(); price_series = pd.Series(price_series.values[mask], index=idx[mask]).dropna()
+            # Build shares step function from events
+            deltas: Dict[pd.Timestamp, float] = {}
+            for ev in holding.events:
+                try:
+                    if not ev.date:
+                        continue
+                    d = pd.to_datetime(ev.date)
+                    d = d.tz_localize(None) if hasattr(d, "tz_localize") else d
+                    delta = 0.0
+                    t = getattr(ev, "type", None)
+                    if t is not None and getattr(t, "value", str(t)).lower() == "purchase":
+                        delta = float(getattr(ev, "shares", 0.0) or 0.0)
+                    elif t is not None and getattr(t, "value", str(t)).lower() == "sale":
+                        delta = -float(getattr(ev, "shares", 0.0) or 0.0)
+                    if delta != 0.0:
+                        deltas[d] = deltas.get(d, 0.0) + delta
+                except Exception:
+                    continue
+            combined_index = price_series.index
+            if deltas:
+                deltas_series = pd.Series(deltas).sort_index()
+                combined_index = combined_index.union(deltas_series.index)
+                shares_series = deltas_series.reindex(combined_index).fillna(0.0).cumsum()
+                shares_on_price = shares_series.reindex(price_series.index, method="ffill").fillna(0.0)
+            else:
+                shares_on_price = pd.Series(0.0, index=price_series.index)
+            value_series = (shares_on_price * price_series).astype(float)
+            return value_series
+        except Exception:
+            return None
+
     def plot_selected() -> None:
         try:
             idx = symbols_list.curselection()[0]
@@ -435,7 +678,62 @@ def build_charts_ui(parent: tk.Widget) -> None:
         ax.set_title(f"{symbol} Price History", color="#ffffff")
         ax.set_xlabel("Date", color="#ffffff")
         ax.set_ylabel("Adj Close", color="#ffffff")
-        ax2.set_ylabel("Ref", color="#ffffff")
+        set_secondary_axis_visible(False)
+        if mode_var.get() == "perf":
+            # Selected symbol value within the portfolio over time (in $)
+            set_secondary_axis_visible(False)
+            val_series = compute_symbol_value_series(holding, start, end)
+            ax.clear()
+            ax.set_facecolor("#1e1e1e")
+            ax.set_title(f"{symbol} Value Over Time", color="#ffffff")
+            ax.set_xlabel("Date", color="#ffffff")
+            ax.set_ylabel("Value ($)", color="#ffffff")
+            if val_series is None or val_series.dropna().empty:
+                ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center", color="#cccccc")
+            else:
+                sdrop = val_series.dropna()
+                try:
+                    last_val = float(sdrop.iloc[-1]) if len(sdrop) >= 1 else None
+                    prev_val = float(sdrop.iloc[-2]) if len(sdrop) >= 2 else None
+                except Exception:
+                    last_val = None; prev_val = None
+                # Update header for selected symbol value
+                try:
+                    company_name = _get_company_name(symbol)
+                    company_var.set(f"{company_name} ({symbol})")
+                    if last_val is not None:
+                        price_var.set(f"${int(round(last_val)):,}")
+                        if prev_val is not None and prev_val != 0:
+                            diff = last_val - prev_val
+                            pct = (last_val/prev_val - 1.0) * 100.0
+                            sign = "+" if diff > 0 else ""
+                            change_var.set(f"{sign}${int(round(diff)):,} ({pct:+.2f}%)")
+                            try:
+                                change_label.configure(foreground=("#ef5350" if diff < 0 else ("#4caf50" if diff > 0 else "")))
+                            except Exception:
+                                pass
+                        else:
+                            change_var.set("")
+                    else:
+                        price_var.set(""); change_var.set("")
+                    status_var.set("At close" if _is_after_close_eastern() else "")
+                except Exception:
+                    pass
+                try:
+                    ax.plot(sdrop.index, sdrop.values, label=symbol, color="#0a84ff")
+                except Exception:
+                    pass
+            ax.grid(True, color="#333333", linestyle="--", linewidth=0.5)
+            apply_date_axis_format(ax)
+            for spine in ax.spines.values():
+                spine.set_color("#ffffff")
+            for spine in ax2.spines.values():
+                spine.set_color("#ffffff")
+            update_axes_fonts(ax, font_scale)
+            update_axes_fonts(ax2, font_scale)
+            canvas.draw_idle()
+            return
+
         if df is None or df.empty:
             # Fallback to values cache: derive price = value / shares when shares > 0
             vdf = read_values_cache(symbol)
@@ -459,18 +757,31 @@ def build_charts_ui(parent: tk.Widget) -> None:
                     price = price.dropna()
                     vprint(f"charts: derived price rows={len(price)} for {symbol}")
                     if not price.empty:
-                        ax.plot(price.index, price.values, label=f"{symbol} (derived)", color="#0a84ff")
-                        # Also attempt reference series if enabled
-                        if ref_enable_var.get() and ref_var.get().strip():
-                            ref_sym = ref_var.get().strip().upper()
-                            try:
-                                ref_df = fetch_price_history(ref_sym, start, end_plus, avoid_network=True)
-                            except Exception:
-                                ref_df = None
-                            if ref_df is not None and not ref_df.empty:
-                                ref_series = ref_df["Close"] if "Close" in ref_df.columns else (ref_df["Adj Close"] if "Adj Close" in ref_df.columns else ref_df.iloc[:, 0])
-                                set_secondary_axis_visible(True)
-                                ax2.plot(ref_series.index, ref_series.values, label=ref_sym, color="#ff9f0a")
+                        # Update header values from derived price
+                        try:
+                            sdrop = price.dropna()
+                            last_p = float(sdrop.iloc[-1]) if len(sdrop) >= 1 else None
+                            prev_p = float(sdrop.iloc[-2]) if len(sdrop) >= 2 else None
+                        except Exception:
+                            last_p = None; prev_p = None
+                        update_header_for_symbol(symbol, last_p, prev_p)
+                        if mode_var.get() == "perf":
+                            # Handled earlier; keep here for structure
+                            set_secondary_axis_visible(False)
+                        else:
+                            ax.set_ylabel("Adj Close", color="#ffffff")
+                            ax.plot(price.index, price.values, label=f"{symbol} (derived)", color="#0a84ff")
+                            # Reference on secondary axis
+                            if ref_enable_var.get() and ref_var.get().strip():
+                                ref_sym = ref_var.get().strip().upper()
+                                try:
+                                    ref_df = fetch_price_history(ref_sym, start, end_plus, avoid_network=True)
+                                except Exception:
+                                    ref_df = None
+                                if ref_df is not None and not ref_df.empty:
+                                    ref_series = ref_df["Close"] if "Close" in ref_df.columns else (ref_df["Adj Close"] if "Adj Close" in ref_df.columns else ref_df.iloc[:, 0])
+                                    set_secondary_axis_visible(True)
+                                    ax2.plot(ref_series.index, ref_series.values, label=ref_sym, color="#ff9f0a")
                         try:
                             lines, labels = ax.get_legend_handles_labels()
                             lines2, labels2 = ax2.get_legend_handles_labels()
@@ -494,29 +805,47 @@ def build_charts_ui(parent: tk.Widget) -> None:
                 series = pd.Series(series.values[mask], index=idx[mask])
             except Exception:
                 pass
-            ax.plot(series.index, series.values, label=symbol, color="#0a84ff")
-            # Plot reference if enabled
-            if ref_enable_var.get() and ref_var.get().strip():
-                ref_sym = ref_var.get().strip().upper()
-                try:
-                    ref_df = fetch_price_history(ref_sym, start, end_plus, avoid_network=True)
-                except Exception:
-                    ref_df = None
-                if ref_df is not None and not ref_df.empty:
-                    ref_series = ref_df["Close"] if "Close" in ref_df.columns else (ref_df["Adj Close"] if "Adj Close" in ref_df.columns else ref_df.iloc[:, 0])
+            # Update header with last/prev from series
+            try:
+                sdrop = series.dropna()
+                last_p = float(sdrop.iloc[-1]) if len(sdrop) >= 1 else None
+                prev_p = float(sdrop.iloc[-2]) if len(sdrop) >= 2 else None
+            except Exception:
+                last_p = None; prev_p = None
+            update_header_for_symbol(symbol, last_p, prev_p)
+
+            if mode_var.get() == "perf":
+                # Handled earlier; no per-symbol perf plotting here
+                set_secondary_axis_visible(False)
+            else:
+                ax.set_ylabel("Adj Close", color="#ffffff")
+                splot = series.dropna()
+                if splot.empty:
+                    ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center", color="#cccccc")
+                else:
+                    ax.plot(splot.index, splot.values, label=symbol, color="#0a84ff")
+                # Plot reference if enabled on secondary axis
+                if ref_enable_var.get() and ref_var.get().strip():
+                    ref_sym = ref_var.get().strip().upper()
                     try:
-                        ridx = pd.to_datetime(ref_series.index, errors="coerce")
-                        ridx = ridx.tz_localize(None) if hasattr(ridx, "tz_localize") else ridx
-                        rmask = ~ridx.isna()
-                        ref_series = pd.Series(ref_series.values[rmask], index=ridx[rmask])
+                        ref_df = fetch_price_history(ref_sym, start, end_plus, avoid_network=True)
                     except Exception:
-                        pass
-                    set_secondary_axis_visible(True)
-                    ax2.plot(ref_series.index, ref_series.values, label=ref_sym, color="#ff9f0a")
+                        ref_df = None
+                    if ref_df is not None and not ref_df.empty:
+                        ref_series = ref_df["Close"] if "Close" in ref_df.columns else (ref_df["Adj Close"] if "Adj Close" in ref_df.columns else ref_df.iloc[:, 0])
+                        try:
+                            ridx = pd.to_datetime(ref_series.index, errors="coerce")
+                            ridx = ridx.tz_localize(None) if hasattr(ridx, "tz_localize") else ridx
+                            rmask = ~ridx.isna()
+                            ref_series = pd.Series(ref_series.values[rmask], index=ridx[rmask])
+                        except Exception:
+                            pass
+                        rplot = ref_series.dropna()
+                        if not rplot.empty:
+                            set_secondary_axis_visible(True)
+                            ax2.plot(rplot.index, rplot.values, label=ref_sym, color="#ff9f0a")
                 else:
                     set_secondary_axis_visible(False)
-            else:
-                set_secondary_axis_visible(False)
             # Legends: combine from both axes
             try:
                 lines, labels = ax.get_legend_handles_labels()
