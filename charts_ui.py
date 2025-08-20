@@ -155,6 +155,19 @@ def build_charts_ui(parent: tk.Widget) -> None:
     ax.set_title("Price History", color="#ffffff")
     ax.set_xlabel("Date", color="#ffffff")
     ax.set_ylabel("Adj Close", color="#ffffff")
+    # Hide secondary y-axis by default; only show when plotting a reference series
+    def set_secondary_axis_visible(visible: bool) -> None:
+        try:
+            ax2.get_yaxis().set_visible(visible)
+            try:
+                ax2.spines["right"].set_visible(visible)
+            except Exception:
+                pass
+            # Hide label text when not visible
+            ax2.set_ylabel("Ref" if visible else "", color="#ffffff")
+        except Exception:
+            pass
+    set_secondary_axis_visible(False)
 
     canvas = FigureCanvasTkAgg(fig, master=right)
     canvas_widget = canvas.get_tk_widget()
@@ -375,7 +388,7 @@ def build_charts_ui(parent: tk.Widget) -> None:
         ax.set_title("Price History", color="#ffffff")
         ax.set_xlabel("Date", color="#ffffff")
         ax.set_ylabel("Adj Close", color="#ffffff")
-        ax2.set_ylabel("Ref", color="#ffffff")
+        set_secondary_axis_visible(False)
         ax.text(0.5, 0.5, "No symbols", transform=ax.transAxes, ha="center", va="center", color="#cccccc")
         ax.grid(True, color="#333333", linestyle="--", linewidth=0.5)
         apply_date_axis_format(ax)
@@ -456,6 +469,7 @@ def build_charts_ui(parent: tk.Widget) -> None:
                                 ref_df = None
                             if ref_df is not None and not ref_df.empty:
                                 ref_series = ref_df["Close"] if "Close" in ref_df.columns else (ref_df["Adj Close"] if "Adj Close" in ref_df.columns else ref_df.iloc[:, 0])
+                                set_secondary_axis_visible(True)
                                 ax2.plot(ref_series.index, ref_series.values, label=ref_sym, color="#ff9f0a")
                         try:
                             lines, labels = ax.get_legend_handles_labels()
@@ -497,7 +511,12 @@ def build_charts_ui(parent: tk.Widget) -> None:
                         ref_series = pd.Series(ref_series.values[rmask], index=ridx[rmask])
                     except Exception:
                         pass
+                    set_secondary_axis_visible(True)
                     ax2.plot(ref_series.index, ref_series.values, label=ref_sym, color="#ff9f0a")
+                else:
+                    set_secondary_axis_visible(False)
+            else:
+                set_secondary_axis_visible(False)
             # Legends: combine from both axes
             try:
                 lines, labels = ax.get_legend_handles_labels()
