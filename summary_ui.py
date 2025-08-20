@@ -7,6 +7,8 @@ import os
 from models import Portfolio, Holding, EventType
 import storage
 from market_data import fetch_price_history
+from values_cache import read_values_cache
+import pandas as pd
 
 
 def _normalize_date(date_str: str) -> str:
@@ -68,15 +70,22 @@ def build_summary_ui(parent: tk.Widget) -> None:
     metrics = ttk.Frame(parent)
     metrics.pack(fill="x", padx=8, pady=(0, 8))
 
-    lbl_total_value = tk.StringVar(value="Total Value: -")
-    lbl_total_cost = tk.StringVar(value="Total Cost: -")
+    lbl_total_cost = tk.StringVar(value="Cost: -")
     lbl_dividends = tk.StringVar(value="Dividends: -")
-    lbl_roi = tk.StringVar(value="ROI: -")
 
-    ttk.Label(metrics, textvariable=lbl_total_value).pack(side="left", padx=(0, 16))
+    # Big total value with ROI subtext
+    from tkinter import font as tkfont
+    base_font = tkfont.nametofont("TkDefaultFont")
+    big_font = base_font.copy()
+    big_font.configure(size=int(base_font.cget("size")) + 10, weight="bold")
+
+    total_value_label = tk.Label(metrics, text="$-", font=big_font, fg="#cccccc", padx=8)
+    total_value_label.pack(side="left", padx=(0, 8))
+    roi_subtext = tk.Label(metrics, text="ROI: -", padx=4)
+    roi_subtext.pack(side="left", padx=(0, 16))
+
     ttk.Label(metrics, textvariable=lbl_total_cost).pack(side="left", padx=(0, 16))
     ttk.Label(metrics, textvariable=lbl_dividends).pack(side="left", padx=(0, 16))
-    ttk.Label(metrics, textvariable=lbl_roi).pack(side="left", padx=(0, 16))
 
     # Symbols table
     columns = ("symbol", "shares", "last_price", "value", "cost", "roi", "start", "last")
@@ -128,18 +137,33 @@ def build_summary_ui(parent: tk.Widget) -> None:
     def last_price(symbol: str) -> Optional[float]:
         if symbol in last_price_cache:
             return last_price_cache[symbol]
-        # Fetch last close over recent window
-        end = date.today()
-        start = end - timedelta(days=14)
-        # Use cache-only to keep UI snappy; background worker will update cache
-        df = fetch_price_history(symbol, start.isoformat(), (end + timedelta(days=1)).isoformat(), avoid_network=True)
-        price = None
-        if df is not None and not df.empty:
-            series = df["Close"] if "Close" in df.columns else df.iloc[:, 0]
-            try:
-                price = float(series.dropna().iloc[-1])
-            except Exception:  # noqa: BLE001
-                price = None
+        # Prefer values cache derived price (robust and warmed by worker)
+        price: Optional[float] = None
+        try:
+            vdf = read_values_cache(symbol)
+            if vdf is not None and not vdf.empty:
+                # Last non-null value with shares > 0
+                vdf = vdf.copy()
+                vdf.sort_values("date", inplace=True)
+                vdf["shares"] = pd.to_numeric(vdf.get("shares"), errors="coerce")
+                vdf["value"] = pd.to_numeric(vdf.get("value"), errors="coerce")
+                vdf = vdf[(vdf["shares"] > 0) & (~vdf["value"].isna())]
+                if not vdf.empty:
+                    last_row = vdf.iloc[-1]
+                    price = float(last_row["value"]) / float(last_row["shares"]) if float(last_row["shares"]) > 0 else None
+        except Exception:
+            price = None
+        # Fallback to price cache if needed
+        if price is None:
+            end = date.today()
+            start = end - timedelta(days=14)
+            df = fetch_price_history(symbol, start.isoformat(), (end + timedelta(days=1)).isoformat(), avoid_network=True)
+            if df is not None and not df.empty:
+                series = df["Close"] if "Close" in df.columns else df.iloc[:, 0]
+                try:
+                    price = float(series.dropna().iloc[-1])
+                except Exception:
+                    price = None
         last_price_cache[symbol] = price
         return price
 
@@ -165,10 +189,14 @@ def build_summary_ui(parent: tk.Widget) -> None:
             rows.append((sym, shares, lp, value, cost, roi, start_dt, last_dt))
             total_value += value
             total_cost += max(0.0, cost)
-        # Dividends total
+        # Dividends total: include cash events and reinvested (holding-level) dividends
         for ev in portfolio.cash_events:
             if ev.type == EventType.DIVIDEND:
                 total_div += float(ev.amount or 0)
+        for h in portfolio.holdings:
+            for ev in h.events:
+                if ev.type == EventType.DIVIDEND:
+                    total_div += float(ev.amount or 0)
 
         # Sort rows
         def sort_key(row: Tuple) -> Tuple:
@@ -201,10 +229,14 @@ def build_summary_ui(parent: tk.Widget) -> None:
         overall_roi = None
         if total_cost > 0:
             overall_roi = (total_value + total_div - total_cost) / total_cost
-        lbl_total_value.set(f"Total Value: {total_value:.2f}")
-        lbl_total_cost.set(f"Total Cost: {total_cost:.2f}")
-        lbl_dividends.set(f"Dividends: {total_div:.2f}")
-        lbl_roi.set("ROI: -" if overall_roi is None else f"ROI: {overall_roi*100:.2f}%")
+        # Update big total value with color and ROI subtext
+        color = "#cccccc"
+        if overall_roi is not None:
+            color = "#2ecc71" if overall_roi >= 0 else "#e74c3c"
+        total_value_label.config(text=f"${total_value:,.0f}", fg=color)
+        roi_subtext.config(text=("ROI: -" if overall_roi is None else f"ROI: {overall_roi*100:.2f}%"))
+        lbl_total_cost.set(f"Cost: {total_cost:,.0f}")
+        lbl_dividends.set(f"Dividends: {total_div:,.0f}")
 
         auto_size_columns()
 

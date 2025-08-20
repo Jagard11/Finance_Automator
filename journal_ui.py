@@ -7,6 +7,7 @@ from typing import Dict, List, Optional
 import os
 import time
 import pandas as pd
+import math
 
 import storage
 from models import Portfolio
@@ -127,6 +128,26 @@ def build_journal_ui(parent: tk.Widget) -> None:
 
         # Body rendered in chunks to avoid stalls
         rows = list(df.index)
+        # Pre-compute max index per symbol for ATH highlighting
+        max_idx: Dict[str, int] = {}
+        for sym in symbols:
+            try:
+                coln = pd.to_numeric(df[sym], errors="coerce")
+                if coln.isna().all():
+                    continue
+                max_label = coln.idxmax()
+                pos = int(df.index.get_indexer_for([max_label])[0])
+                max_idx[sym] = pos
+            except Exception:
+                continue
+
+        # Configure row tags for zebra striping and ATH font
+        try:
+            tree.tag_configure("odd", background="#1b1b1b")
+            tree.tag_configure("even", background="#232323")
+            tree.tag_configure("ath_row", font=highlight_font)
+        except Exception:
+            pass
         chunk = 200
         render_seq += 1
         my_seq = render_seq
@@ -139,10 +160,27 @@ def build_journal_ui(parent: tk.Widget) -> None:
             for i in range(start, end):
                 d = rows[i]
                 values: List[str] = [getattr(d, "isoformat", lambda: str(d))()]
+                row_has_ath = False
                 for sym in symbols:
                     val = df.at[d, sym]
-                    values.append("" if pd.isna(val) else f"{val}")
-                tree.insert("", "end", values=values)
+                    if pd.isna(val):
+                        values.append("")
+                        continue
+                    try:
+                        num = float(val)
+                        dollars = math.ceil(num)
+                        text = f"${dollars:,}"
+                    except Exception:
+                        text = str(val)
+                    if max_idx.get(sym) == i:
+                        # Mark as ATH
+                        text = f"▲ {text}"
+                        row_has_ath = True
+                    values.append(text)
+                tags = ["odd" if (i % 2) else "even"]
+                if row_has_ath:
+                    tags.append("ath_row")
+                tree.insert("", "end", values=values, tags=tags)
             if end < len(rows):
                 try:
                     show_status(f"Rendering journal... {end}/{len(rows)}", spinning=True)
