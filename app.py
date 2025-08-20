@@ -4,6 +4,7 @@ from tkinter import ttk
 from portfolio_ui import build_portfolio_ui
 from charts_ui import build_charts_ui, register_charts_tab_handlers
 from summary_ui import build_summary_ui, register_summary_tab_handlers
+from journal_ui import build_journal_ui, register_journal_tab_handlers
 from theme import apply_dark_theme
 from startup_tasks import run_startup_tasks_in_background
 
@@ -51,17 +52,21 @@ def main() -> None:
     summary_frame = ttk.Frame(notebook)
     portfolio_frame = ttk.Frame(notebook)
     charts_frame = ttk.Frame(notebook)
+    journal_frame = ttk.Frame(notebook)
 
     notebook.add(summary_frame, text="Summary")
     notebook.add(portfolio_frame, text="Portfolio")
     notebook.add(charts_frame, text="Charts")
+    notebook.add(journal_frame, text="Journal")
 
     build_summary_ui(summary_frame)
     build_portfolio_ui(portfolio_frame)
     build_charts_ui(charts_frame)
+    build_journal_ui(journal_frame)
 
     register_summary_tab_handlers(notebook, summary_frame)
     register_charts_tab_handlers(notebook, charts_frame)
+    register_journal_tab_handlers(notebook, journal_frame)
 
     # Ensure Summary is default selected tab
     notebook.select(summary_frame)

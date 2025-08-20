@@ -7,6 +7,7 @@ import os
 
 from models import Portfolio, Holding, Event, EventType
 import storage
+from values_cache import mark_symbol_dirty
 
 
 def build_portfolio_ui(parent: tk.Widget) -> None:
@@ -298,6 +299,7 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
                     note=new_entry_values["note"],
                 )
                 target.events.append(ev)
+                mark_symbol_dirty(target.symbol)
 
                 # Reset draft and refresh
                 new_entry_values = {
@@ -344,8 +346,13 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             del current_holding.events[idx]
             target_holding = portfolio.ensure_holding(new_symbol)
             target_holding.events.append(ev)
+            mark_symbol_dirty(new_symbol)
+            mark_symbol_dirty(current_holding.symbol)
             refresh_holdings_list()
             return
+
+        # Mark dirty for any edit
+        mark_symbol_dirty(current_holding.symbol)
 
         if col == "date":
             ev.date = (value or "").strip()
@@ -499,6 +506,7 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             return
         if 0 <= idx < len(holding.events):
             del holding.events[idx]
+            mark_symbol_dirty(sym)
             refresh_events_list()
 
     def on_holdings_double_click(evt) -> None:  # noqa: ANN001
@@ -522,6 +530,7 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             return
         portfolio.ensure_holding(sym)
         selected_holding_symbol = sym
+        mark_symbol_dirty(sym)
         refresh_holdings_list()
 
     def poll_for_changes() -> None:
