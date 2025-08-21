@@ -8,7 +8,8 @@ import math
 from models import Portfolio, Holding, EventType
 import storage
 from market_data import fetch_price_history
-from values_cache import read_values_cache
+from values_cache import read_values_cache, mark_symbol_dirty, values_cache_path
+from startup_tasks import get_task_queue
 import pandas as pd
 import settings
 
@@ -92,17 +93,48 @@ def build_summary_ui(parent: tk.Widget) -> None:
     day_profit_big = tk.Label(leftcol, text="$- (Today)", font=big_font, fg="#cccccc", padx=8)
     day_profit_big.pack(anchor="w")
 
-    roi_subtext = tk.Label(metrics, text="ROI: -", padx=4)
+    # Right column to hold cache status and ROI/Day%/Cost/Dividends
+    rightcol = ttk.Frame(metrics)
+    rightcol.pack(side="left", fill="x", expand=True)
+
+    # Cache status row (age + refresh) shown above ROI/Day%/Cost within right column
+    cache_row = ttk.Frame(rightcol)
+    cache_row.pack(side="top", fill="x", anchor="w", pady=(0, 4))
+    cache_age_var = tk.StringVar(value="Cache: -")
+    ttk.Label(cache_row, textvariable=cache_age_var).pack(side="left")
+
+    def on_refresh_data() -> None:
+        # Mark all symbols dirty so warm will recompute, then trigger warm task
+        try:
+            for h in portfolio.holdings:
+                try:
+                    mark_symbol_dirty(h.symbol)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            q = get_task_queue()
+            if q is not None:
+                # On manual refresh, bypass stale caches to fetch latest (e.g., crypto after hours)
+                q.put_nowait({"type": "warm_values", "path": storage.default_portfolio_path(), "prefer_cache": False})
+                cache_age_var.set("Cache: refreshing…")
+        except Exception:
+            pass
+
+    ttk.Button(cache_row, text="Refresh Data", command=on_refresh_data).pack(side="left", padx=(8, 0))
+
+    roi_subtext = tk.Label(rightcol, text="ROI: -", padx=4)
     roi_subtext.pack(side="left", padx=(0, 8))
     # Promote Total to big font and position it to the left of the big performance values
     total_value_subtext = tk.Label(metrics, text="Total: -", padx=4)
     total_value_subtext.configure(font=big_font)
     total_value_subtext.pack(side="left", padx=(0, 16), before=leftcol)
-    day_gain_pct_header = tk.Label(metrics, text="Day %: -", padx=4)
+    day_gain_pct_header = tk.Label(rightcol, text="Day %: -", padx=4)
     day_gain_pct_header.pack(side="left", padx=(0, 8))
 
-    ttk.Label(metrics, textvariable=lbl_total_cost).pack(side="left", padx=(0, 16))
-    ttk.Label(metrics, textvariable=lbl_dividends).pack(side="left", padx=(0, 16))
+    ttk.Label(rightcol, textvariable=lbl_total_cost).pack(side="left", padx=(0, 16))
+    ttk.Label(rightcol, textvariable=lbl_dividends).pack(side="left", padx=(0, 16))
 
     # Symbols table
     columns = ("symbol", "shares", "last_price", "value", "cost", "avg_cost", "day_gain", "day_gain_pct", "roi", "start", "last")
@@ -292,6 +324,9 @@ def build_summary_ui(parent: tk.Widget) -> None:
         rows: List[Tuple] = []
         portfolio_day_gain_total = 0.0
         portfolio_prev_value_total = 0.0
+        # Track cache recency across holdings (file modification time)
+        latest_cache_mtime: Optional[float] = None
+
         for holding in portfolio.holdings:
             sym = holding.symbol
             shares = _shares_held(holding)
@@ -309,6 +344,27 @@ def build_summary_ui(parent: tk.Widget) -> None:
                 except Exception:
                     avg_cost = None
             prev_close, last_close = day_prices(sym)
+
+            # Determine last cached date and file mtime for this symbol
+            try:
+                vdf = read_values_cache(sym)
+                if vdf is not None and not vdf.empty:
+                    vdf = vdf.copy()
+                    vdf.sort_values("date", inplace=True)
+                    vdf["shares"] = pd.to_numeric(vdf.get("shares"), errors="coerce")
+                    vdf["value"] = pd.to_numeric(vdf.get("value"), errors="coerce")
+                    vdf = vdf[(vdf["shares"] > 0) & (~vdf["value"].isna())]
+                    # Track latest file mtime for any symbol with positive shares
+                    if shares and shares > 0:
+                        try:
+                            path = values_cache_path(sym)
+                            if os.path.exists(path):
+                                m = os.path.getmtime(path)
+                                latest_cache_mtime = m if latest_cache_mtime is None else max(latest_cache_mtime, m)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
             day_gain_val: Optional[float] = None
             day_gain_pct: Optional[float] = None
             try:
@@ -403,6 +459,26 @@ def build_summary_ui(parent: tk.Widget) -> None:
         else:
             day_profit_big.config(text="- (Today)", fg=day_color)
             day_gain_pct_header.config(text="Day %: -", fg=day_color)
+
+        # Update cache age label using file modification time; fallback to '-'
+        try:
+            if latest_cache_mtime is not None:
+                ts = datetime.fromtimestamp(latest_cache_mtime)
+                age_seconds = max(0, (datetime.now() - ts).total_seconds())
+                if age_seconds < 86400:
+                    hours = int(age_seconds // 3600)
+                    if hours <= 0:
+                        mins = int(max(1, age_seconds // 60))
+                        cache_age_var.set(f"Cache: {ts.strftime('%Y-%m-%d %H:%M')} ({mins}m old)")
+                    else:
+                        cache_age_var.set(f"Cache: {ts.strftime('%Y-%m-%d %H:%M')} ({hours}h old)")
+                else:
+                    days = int(age_seconds // 86400)
+                    cache_age_var.set(f"Cache: {ts.strftime('%Y-%m-%d %H:%M')} ({days}d old)")
+            else:
+                cache_age_var.set("Cache: -")
+        except Exception:
+            pass
 
         auto_size_columns()
 

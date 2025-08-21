@@ -37,8 +37,8 @@ def fetch_nasdaq_symbols() -> List[str]:
     return symbols
 
 
-def fetch_price_history(symbol: str, start_date: str, end_date: str, avoid_network: bool = False) -> pd.DataFrame:
-    vprint(f"fetch_price_history: sym={symbol} {start_date}..{end_date} avoid_network={avoid_network}")
+def fetch_price_history(symbol: str, start_date: str, end_date: str, avoid_network: bool = False, prefer_cache: bool = True) -> pd.DataFrame:
+    vprint(f"fetch_price_history: sym={symbol} {start_date}..{end_date} avoid_network={avoid_network} prefer_cache={prefer_cache}")
     # Prefer cached CSV from prefetch when available, then fall back to yfinance
     def _read_cache() -> Optional[pd.DataFrame]:
         path = os.path.join(get_cache_dir(), f"{symbol.upper()}_prices.csv")
@@ -97,7 +97,7 @@ def fetch_price_history(symbol: str, start_date: str, end_date: str, avoid_netwo
                 pass
         return data
 
-    cached = _read_cache()
+    cached = _read_cache() if prefer_cache else None
     if cached is not None and not cached.empty:
         vprint(f"fetch_price_history: cache hit rows={len(cached)} cols={list(cached.columns)}")
         return cached

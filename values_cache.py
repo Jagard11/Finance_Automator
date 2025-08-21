@@ -67,7 +67,7 @@ def read_values_cache(symbol: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def compute_and_write_values_for_holding(holding: Holding, start_iso: str, end_iso: Optional[str] = None) -> bool:
+def compute_and_write_values_for_holding(holding: Holding, start_iso: str, end_iso: Optional[str] = None, prefer_cache: bool = True) -> bool:
     # Normalize dates to ISO YYYY-MM-DD
     def _norm(s: str) -> str:
         try:
@@ -81,7 +81,7 @@ def compute_and_write_values_for_holding(holding: Holding, start_iso: str, end_i
     end_iso = end_iso or date.today().isoformat()
     # Fetch prices
     end_plus = (date.fromisoformat(end_iso) + timedelta(days=1)).isoformat()
-    df = fetch_price_history(symbol, start_iso, end_plus)
+    df = fetch_price_history(symbol, start_iso, end_plus, avoid_network=False, prefer_cache=prefer_cache)
     if df is None or df.empty:
         # Still write empty to indicate attempted
         vprint("compute_and_write_values_for_holding: empty prices")
@@ -132,7 +132,7 @@ def compute_and_write_values_for_holding(holding: Holding, start_iso: str, end_i
     return True
 
 
-def warm_values_cache_for_portfolio(portfolio_path: str) -> int:
+def warm_values_cache_for_portfolio(portfolio_path: str, prefer_cache: bool = True) -> int:
     vprint(f"warm_values_cache_for_portfolio: {portfolio_path}")
     portfolio = storage.load_portfolio(portfolio_path)
     changes = 0
@@ -164,7 +164,7 @@ def warm_values_cache_for_portfolio(portfolio_path: str) -> int:
             if not dates:
                 continue
             start_iso = min(dates)
-            if compute_and_write_values_for_holding(h, start_iso):
+            if compute_and_write_values_for_holding(h, start_iso, prefer_cache=prefer_cache):
                 changes += 1
             clear_symbol_dirty(symbol)
     vprint(f"warm_values_cache_for_portfolio: updated={changes}")

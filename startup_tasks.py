@@ -110,11 +110,12 @@ def _run_all(progress_q: Optional[mp.Queue] = None, task_q: Optional[mp.Queue] =
             break
         if ttype == "warm_values":
             path = task.get("path")
+            prefer_cache = bool(task.get("prefer_cache", True))
             paths = [path] if isinstance(path, str) else list(storage.list_portfolio_paths())
             total_updated = 0
             for p in paths:
                 try:
-                    updated = warm_values_cache_for_portfolio(p)
+                    updated = warm_values_cache_for_portfolio(p, prefer_cache=prefer_cache)
                     # After warming, rebuild journal for that portfolio
                     build_journal_csv_streaming(p)
                 except Exception as exc:  # noqa: BLE001
