@@ -62,7 +62,8 @@ def build_charts_ui(parent: tk.Widget) -> None:
     sort_combo.pack(side="left", padx=8)
 
     ttk.Label(left, text="Symbols").pack(anchor="w", padx=8)
-    symbols_list = tk.Listbox(left, height=12)
+    # Keep selection when focus moves away (so returning to tab retains selection)
+    symbols_list = tk.Listbox(left, height=12, exportselection=False)
     symbols_list.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
     # Reference data controls
@@ -648,12 +649,37 @@ def build_charts_ui(parent: tk.Widget) -> None:
             return None
 
     def plot_selected() -> None:
+        # Resolve a robust selection; fallback to first item if none
+        idx: Optional[int] = None
         try:
-            idx = symbols_list.curselection()[0]
-        except IndexError:
+            sel = symbols_list.curselection()
+            if sel:
+                idx = int(sel[0])
+        except Exception:
+            idx = None
+        if idx is None:
+            try:
+                active_idx = symbols_list.index("active")
+                idx = int(active_idx) if isinstance(active_idx, int) else 0
+            except Exception:
+                idx = None
+        if idx is None:
+            try:
+                if symbols_list.size() > 0:
+                    idx = 0
+                    symbols_list.selection_clear(0, tk.END)
+                    symbols_list.selection_set(idx)
+                    symbols_list.activate(idx)
+            except Exception:
+                idx = None
+        if idx is None:
             clear_chart()
             return
-        symbol = symbols_list.get(idx)
+        try:
+            symbol = symbols_list.get(idx)
+        except Exception:
+            clear_chart()
+            return
         # Persist last selected symbol
         try:
             s = load_settings()
@@ -918,11 +944,64 @@ def build_charts_ui(parent: tk.Widget) -> None:
         _restore_sash()
 
     # Expose a hook on the parent so external code can trigger a refresh/plot
-    setattr(parent, "_charts_refresh_and_plot", lambda: (reload_portfolio(),))
+    def _ensure_selection_and_plot() -> None:
+        try:
+            if symbols_list.size() <= 0:
+                clear_chart()
+                return
+            if not symbols_list.curselection():
+                # Restore last symbol if present, else first
+                try:
+                    s = load_settings()
+                    last = (s.get("charts", {}) or {}).get("last_symbol")
+                    idx = 0
+                    if isinstance(last, str) and last:
+                        syms = [symbols_list.get(i) for i in range(symbols_list.size())]
+                        if last in syms:
+                            idx = syms.index(last)
+                    symbols_list.selection_clear(0, tk.END)
+                    symbols_list.selection_set(idx)
+                    symbols_list.activate(idx)
+                except Exception:
+                    try:
+                        symbols_list.selection_clear(0, tk.END)
+                        symbols_list.selection_set(0)
+                        symbols_list.activate(0)
+                    except Exception:
+                        pass
+            plot_selected()
+            try:
+                canvas.draw()
+            except Exception:
+                pass
+        except Exception:
+            # Keep UI responsive even if something goes wrong
+            pass
+
+    def _refresh_and_plot() -> None:
+        try:
+            reload_portfolio()
+        except Exception:
+            pass
+        try:
+            parent.after_idle(_ensure_selection_and_plot)
+        except Exception:
+            _ensure_selection_and_plot()
+
+    setattr(parent, "_charts_refresh_and_plot", _refresh_and_plot)
 
     # Global notification when portfolio changes (e.g., symbol added in Portfolio tab)
     try:
-        parent.bind_all("<<PortfolioChanged>>", lambda _e: reload_portfolio())
+        def _on_portfolio_changed(_e=None):  # noqa: ANN001
+            try:
+                reload_portfolio()
+            except Exception:
+                pass
+            try:
+                parent.after_idle(_ensure_selection_and_plot)
+            except Exception:
+                _ensure_selection_and_plot()
+        parent.bind_all("<<PortfolioChanged>>", _on_portfolio_changed)
     except Exception:
         pass
 
