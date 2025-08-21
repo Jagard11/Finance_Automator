@@ -10,7 +10,7 @@ from values_cache import warm_values_cache_for_portfolio, mark_symbol_dirty
 from journal_builder import build_journal_csv_streaming
 from settings import vprint
 import storage
-from market_data import update_realtime_price_cache
+from market_data import update_realtime_price_cache, fetch_realtime_prices_batch, write_realtime_snapshot
 
 
 def _run_all(progress_q: Optional[mp.Queue] = None, task_q: Optional[mp.Queue] = None) -> None:
@@ -107,17 +107,22 @@ def _run_all(progress_q: Optional[mp.Queue] = None, task_q: Optional[mp.Queue] =
         # Periodic realtime price refresh (lightweight, every ~60s)
         if now - last_realtime > 60:
             try:
-                syms = list(collect_all_symbols())
+                syms = sorted(list(collect_all_symbols()))
             except Exception:
                 syms = []
-            for s in syms:
-                try:
-                    if update_realtime_price_cache(s):
-                        send({"type": "realtime:updated", "symbol": s})
-                except Exception as exc:  # noqa: BLE001
-                    send({"type": "realtime:error", "symbol": s, "error": str(exc)})
             if syms:
-                send({"type": "realtime:batch"})
+                try:
+                    prices = fetch_realtime_prices_batch(syms)
+                    # If any missing, treat as error; do not partially write
+                    missing = [s for s, p in prices.items() if p is None]
+                    if missing:
+                        send({"type": "realtime:error", "missing": missing})
+                    else:
+                        # Single snapshot timestamp across all symbols
+                        wrote = write_realtime_snapshot({s: float(prices[s]) for s in syms}, snapshot_ts=None)
+                        send({"type": "realtime:snapshot", "count": int(wrote)})
+                except Exception as exc:  # noqa: BLE001
+                    send({"type": "realtime:error", "error": str(exc)})
             last_realtime = now
 
         if task is None:
@@ -194,17 +199,17 @@ def _run_all(progress_q: Optional[mp.Queue] = None, task_q: Optional[mp.Queue] =
                     send({"type": "prefetch:error", "symbol": sym, "error": str(exc)})
             continue
         if ttype == "realtime:update_all":
-            syms = list(collect_all_symbols())
-            updated_any = False
-            for s in syms:
-                try:
-                    if update_realtime_price_cache(s):
-                        updated_any = True
-                        send({"type": "realtime:updated", "symbol": s})
-                except Exception as exc:  # noqa: BLE001
-                    send({"type": "realtime:error", "symbol": s, "error": str(exc)})
-            if updated_any:
-                send({"type": "realtime:done", "count": len(syms)})
+            syms = sorted(list(collect_all_symbols()))
+            try:
+                prices = fetch_realtime_prices_batch(syms)
+                missing = [s for s, p in prices.items() if p is None]
+                if missing:
+                    send({"type": "realtime:error", "missing": missing})
+                else:
+                    wrote = write_realtime_snapshot({s: float(prices[s]) for s in syms}, snapshot_ts=None)
+                    send({"type": "realtime:snapshot", "count": int(wrote)})
+            except Exception as exc:  # noqa: BLE001
+                send({"type": "realtime:error", "error": str(exc)})
             continue
 
 

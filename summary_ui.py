@@ -7,7 +7,7 @@ import os
 import math
 from models import Portfolio, Holding, EventType
 import storage
-from market_data import fetch_price_history, read_realtime_price
+from market_data import fetch_price_history, read_realtime_price, realtime_price_cache_path
 from values_cache import read_values_cache, mark_symbol_dirty, values_cache_path
 from startup_tasks import get_task_queue
 import pandas as pd
@@ -100,7 +100,7 @@ def build_summary_ui(parent: tk.Widget) -> None:
     # Cache status row (age + refresh) shown above ROI/Day%/Cost within right column
     cache_row = ttk.Frame(rightcol)
     cache_row.pack(side="top", fill="x", anchor="w", pady=(0, 4))
-    cache_age_var = tk.StringVar(value="Cache: -")
+    cache_age_var = tk.StringVar(value="Prices: -")
     ttk.Label(cache_row, textvariable=cache_age_var).pack(side="left")
 
     def on_refresh_data() -> None:
@@ -127,6 +127,7 @@ def build_summary_ui(parent: tk.Widget) -> None:
             q = get_task_queue()
             if q is not None:
                 q.put_nowait({"type": "realtime:update_all"})
+                cache_age_var.set("Prices: refreshing…")
         except Exception:
             pass
 
@@ -348,8 +349,11 @@ def build_summary_ui(parent: tk.Widget) -> None:
         rows: List[Tuple] = []
         portfolio_day_gain_total = 0.0
         portfolio_prev_value_total = 0.0
-        # Track cache recency across holdings (file modification time)
-        latest_cache_mtime: Optional[float] = None
+        # Track data recency across holdings
+        # - realtime_min_mtime: oldest realtime update among all holdings (max staleness)
+        # - values_min_mtime: oldest values cache mtime as fallback
+        realtime_min_mtime: Optional[float] = None
+        values_min_mtime: Optional[float] = None
 
         for holding in portfolio.holdings:
             sym = holding.symbol
@@ -378,15 +382,24 @@ def build_summary_ui(parent: tk.Widget) -> None:
                     vdf["shares"] = pd.to_numeric(vdf.get("shares"), errors="coerce")
                     vdf["value"] = pd.to_numeric(vdf.get("value"), errors="coerce")
                     vdf = vdf[(vdf["shares"] > 0) & (~vdf["value"].isna())]
-                    # Track latest file mtime for any symbol with positive shares
+                    # Track oldest values cache mtime across symbols with positive shares
                     if shares and shares > 0:
                         try:
-                            path = values_cache_path(sym)
-                            if os.path.exists(path):
-                                m = os.path.getmtime(path)
-                                latest_cache_mtime = m if latest_cache_mtime is None else max(latest_cache_mtime, m)
+                            vpath = values_cache_path(sym)
+                            if os.path.exists(vpath):
+                                vm = os.path.getmtime(vpath)
+                                values_min_mtime = vm if values_min_mtime is None else min(values_min_mtime, vm)
                         except Exception:
                             pass
+            except Exception:
+                pass
+            # Also consider realtime file mtimes
+            try:
+                if shares and shares > 0:
+                    rpath = realtime_price_cache_path(sym)
+                    if os.path.exists(rpath):
+                        rm = os.path.getmtime(rpath)
+                        realtime_min_mtime = rm if realtime_min_mtime is None else min(realtime_min_mtime, rm)
             except Exception:
                 pass
             day_gain_val: Optional[float] = None
@@ -484,23 +497,36 @@ def build_summary_ui(parent: tk.Widget) -> None:
             day_profit_big.config(text="- (Today)", fg=day_color)
             day_gain_pct_header.config(text="Day %: -", fg=day_color)
 
-        # Update cache age label using file modification time; fallback to '-'
+        # Update price age label using realtime mtimes only; no fallbacks
         try:
-            if latest_cache_mtime is not None:
-                ts = datetime.fromtimestamp(latest_cache_mtime)
+            if realtime_min_mtime is not None:
+                ts = datetime.fromtimestamp(realtime_min_mtime)
                 age_seconds = max(0, (datetime.now() - ts).total_seconds())
                 if age_seconds < 86400:
                     hours = int(age_seconds // 3600)
                     if hours <= 0:
                         mins = int(max(1, age_seconds // 60))
-                        cache_age_var.set(f"Cache: {ts.strftime('%Y-%m-%d %H:%M')} ({mins}m old)")
+                        cache_age_var.set(f"Prices: {ts.strftime('%Y-%m-%d %H:%M')} ({mins}m old)")
                     else:
-                        cache_age_var.set(f"Cache: {ts.strftime('%Y-%m-%d %H:%M')} ({hours}h old)")
+                        cache_age_var.set(f"Prices: {ts.strftime('%Y-%m-%d %H:%M')} ({hours}h old)")
                 else:
                     days = int(age_seconds // 86400)
-                    cache_age_var.set(f"Cache: {ts.strftime('%Y-%m-%d %H:%M')} ({days}d old)")
+                    cache_age_var.set(f"Prices: {ts.strftime('%Y-%m-%d %H:%M')} ({days}d old)")
             else:
-                cache_age_var.set("Cache: -")
+                # If any symbol has positive shares but lacks a realtime file, signal error
+                missing = []
+                try:
+                    for h in portfolio.holdings:
+                        if _shares_held(h) > 0:
+                            p = realtime_price_cache_path(h.symbol)
+                            if not os.path.exists(p):
+                                missing.append(h.symbol)
+                except Exception:
+                    pass
+                if missing:
+                    cache_age_var.set("Prices: error (missing realtime for some symbols)")
+                else:
+                    cache_age_var.set("Prices: -")
         except Exception:
             pass
 

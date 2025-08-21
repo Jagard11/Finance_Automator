@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import json
-from typing import List, Optional, Callable, TypeVar, Tuple
+from typing import List, Optional, Callable, TypeVar, Tuple, Dict
 import time
 
 import pandas as pd
@@ -234,3 +234,28 @@ def update_realtime_price_cache(symbol: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def fetch_realtime_prices_batch(symbols: List[str]) -> Dict[str, Optional[float]]:
+    out: Dict[str, Optional[float]] = {}
+    for s in symbols:
+        try:
+            out[s] = fetch_realtime_price(s)
+        except Exception:
+            out[s] = None
+    return out
+
+
+def write_realtime_snapshot(symbol_to_price: Dict[str, float], snapshot_ts: Optional[datetime] = None) -> int:
+    ts = snapshot_ts or datetime.now()
+    wrote = 0
+    for s, p in symbol_to_price.items():
+        try:
+            path = realtime_price_cache_path(s)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"symbol": s.upper(), "price": float(p), "timestamp": ts.isoformat()}, f)
+            wrote += 1
+        except Exception:
+            continue
+    return wrote
