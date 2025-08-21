@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 from typing import List, Optional, Callable, TypeVar, Tuple
 import time
 
@@ -158,3 +159,78 @@ def fetch_dividend_payment_dates(symbol: str, start_date: str, end_date: str) ->
     except Exception:
         pass
     return pd.DataFrame(columns=["ex_date", "payment_date", "amount"]).astype({"ex_date": "datetime64[ns]"})
+
+
+# ---- Realtime price caching ----
+
+def realtime_price_cache_path(symbol: str) -> str:
+    return os.path.join(get_cache_dir(), f"{symbol.upper()}_realtime.json")
+
+
+def read_realtime_price(symbol: str) -> Tuple[Optional[float], Optional[datetime]]:
+    path = realtime_price_cache_path(symbol)
+    if not os.path.exists(path):
+        return None, None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        price = None
+        ts = None
+        try:
+            price = float(data.get("price"))
+        except Exception:
+            price = None
+        tval = data.get("timestamp")
+        if isinstance(tval, (int, float)):
+            try:
+                ts = datetime.fromtimestamp(float(tval))
+            except Exception:
+                ts = None
+        elif isinstance(tval, str):
+            try:
+                ts = pd.to_datetime(tval, errors="coerce").to_pydatetime()
+            except Exception:
+                ts = None
+        return price, ts
+    except Exception:
+        return None, None
+
+
+def fetch_realtime_price(symbol: str) -> Optional[float]:
+    vprint(f"fetch_realtime_price: {symbol}")
+    try:
+        ticker = yf.Ticker(symbol)
+        try:
+            df = ticker.history(period="1d", interval="1m", auto_adjust=True, timeout=20)
+        except Exception:
+            df = ticker.history(period="1d", interval="1m", auto_adjust=True)
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            series = df["Close"] if "Close" in df.columns else df.iloc[:, 0]
+            s = series.dropna()
+            if not s.empty:
+                return float(s.iloc[-1])
+        # Fallback to fast_info/regularPrice if available
+        try:
+            info = getattr(ticker, "fast_info", None)
+            if info and hasattr(info, "last_price"):
+                return float(info.last_price)
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return None
+
+
+def update_realtime_price_cache(symbol: str) -> bool:
+    price = fetch_realtime_price(symbol)
+    if price is None:
+        return False
+    data = {"symbol": symbol.upper(), "price": float(price), "timestamp": datetime.now().isoformat()}
+    try:
+        path = realtime_price_cache_path(symbol)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        return True
+    except Exception:
+        return False

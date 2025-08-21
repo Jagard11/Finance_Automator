@@ -7,7 +7,7 @@ import os
 import math
 from models import Portfolio, Holding, EventType
 import storage
-from market_data import fetch_price_history
+from market_data import fetch_price_history, read_realtime_price
 from values_cache import read_values_cache, mark_symbol_dirty, values_cache_path
 from startup_tasks import get_task_queue
 import pandas as pd
@@ -122,7 +122,16 @@ def build_summary_ui(parent: tk.Widget) -> None:
         except Exception:
             pass
 
+    def on_refresh_realtime() -> None:
+        try:
+            q = get_task_queue()
+            if q is not None:
+                q.put_nowait({"type": "realtime:update_all"})
+        except Exception:
+            pass
+
     ttk.Button(cache_row, text="Refresh Data", command=on_refresh_data).pack(side="left", padx=(8, 0))
+    ttk.Button(cache_row, text="Refresh Realtime", command=on_refresh_realtime).pack(side="left", padx=(8, 0))
 
     roi_subtext = tk.Label(rightcol, text="ROI: -", padx=4)
     roi_subtext.pack(side="left", padx=(0, 8))
@@ -237,7 +246,15 @@ def build_summary_ui(parent: tk.Widget) -> None:
     def last_price(symbol: str) -> Optional[float]:
         if symbol in last_price_cache:
             return last_price_cache[symbol]
-        # Prefer values cache derived price (robust and warmed by worker)
+        # Prefer realtime cached price when available
+        try:
+            rt_price, rt_ts = read_realtime_price(symbol)
+            if rt_price is not None:
+                last_price_cache[symbol] = rt_price
+                return rt_price
+        except Exception:
+            pass
+        # Fallback: values cache derived price (robust and warmed by worker)
         price: Optional[float] = None
         try:
             vdf = read_values_cache(symbol)
@@ -273,7 +290,14 @@ def build_summary_ui(parent: tk.Widget) -> None:
             return day_prices_cache[symbol]
         prev: Optional[float] = None
         last: Optional[float] = None
-        # Prefer values cache derived prices (same as last_price logic)
+        # Prefer realtime for 'last' when available; prev still from values cache/history
+        try:
+            rt_price, _ = read_realtime_price(symbol)
+            if rt_price is not None:
+                last = rt_price
+        except Exception:
+            pass
+        # Values cache for prev/last fallback
         try:
             vdf = read_values_cache(symbol)
             if vdf is not None and not vdf.empty:
@@ -282,7 +306,7 @@ def build_summary_ui(parent: tk.Widget) -> None:
                 vdf["shares"] = pd.to_numeric(vdf.get("shares"), errors="coerce")
                 vdf["value"] = pd.to_numeric(vdf.get("value"), errors="coerce")
                 vdf = vdf[(vdf["shares"] > 0) & (~vdf["value"].isna())]
-                if len(vdf) >= 1:
+                if len(vdf) >= 1 and last is None:
                     last_row = vdf.iloc[-1]
                     s_last = float(last_row["shares"]) if float(last_row["shares"]) > 0 else None
                     if s_last is not None:

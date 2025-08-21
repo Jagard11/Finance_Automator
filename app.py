@@ -189,7 +189,7 @@ def main() -> None:
                             print(f"worker: {t} {msg}")
                         except Exception:
                             pass
-                    if t.startswith("dividends:") or t.startswith("values:") or t in {"prefetch:done", "startup:complete", "journal:rebuilt"}:
+                    if t.startswith("dividends:") or t.startswith("values:") or t.startswith("realtime:") or t in {"prefetch:done", "startup:complete", "journal:rebuilt"}:
                         with profiler.section("refresh_all"):
                             refresh_all_throttled()
         # Poll at ~10 fps

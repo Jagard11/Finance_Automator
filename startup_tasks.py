@@ -10,6 +10,7 @@ from values_cache import warm_values_cache_for_portfolio, mark_symbol_dirty
 from journal_builder import build_journal_csv_streaming
 from settings import vprint
 import storage
+from market_data import update_realtime_price_cache
 
 
 def _run_all(progress_q: Optional[mp.Queue] = None, task_q: Optional[mp.Queue] = None) -> None:
@@ -77,6 +78,7 @@ def _run_all(progress_q: Optional[mp.Queue] = None, task_q: Optional[mp.Queue] =
 
     # Task loop: handle on-demand jobs from UI, with periodic maintenance
     last_maint = time.time()
+    last_realtime = 0.0
     while True:
         try:
             task = None
@@ -101,6 +103,22 @@ def _run_all(progress_q: Optional[mp.Queue] = None, task_q: Optional[mp.Queue] =
                 except Exception as exc:  # noqa: BLE001
                     send({"type": "maintenance:error", "path": path, "error": str(exc)})
             last_maint = now
+
+        # Periodic realtime price refresh (lightweight, every ~60s)
+        if now - last_realtime > 60:
+            try:
+                syms = list(collect_all_symbols())
+            except Exception:
+                syms = []
+            for s in syms:
+                try:
+                    if update_realtime_price_cache(s):
+                        send({"type": "realtime:updated", "symbol": s})
+                except Exception as exc:  # noqa: BLE001
+                    send({"type": "realtime:error", "symbol": s, "error": str(exc)})
+            if syms:
+                send({"type": "realtime:batch"})
+            last_realtime = now
 
         if task is None:
             continue
@@ -174,6 +192,19 @@ def _run_all(progress_q: Optional[mp.Queue] = None, task_q: Optional[mp.Queue] =
                     send({"type": "prefetch:one", "symbol": sym})
                 except Exception as exc:  # noqa: BLE001
                     send({"type": "prefetch:error", "symbol": sym, "error": str(exc)})
+            continue
+        if ttype == "realtime:update_all":
+            syms = list(collect_all_symbols())
+            updated_any = False
+            for s in syms:
+                try:
+                    if update_realtime_price_cache(s):
+                        updated_any = True
+                        send({"type": "realtime:updated", "symbol": s})
+                except Exception as exc:  # noqa: BLE001
+                    send({"type": "realtime:error", "symbol": s, "error": str(exc)})
+            if updated_any:
+                send({"type": "realtime:done", "count": len(syms)})
             continue
 
 
