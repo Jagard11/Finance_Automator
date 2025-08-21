@@ -527,7 +527,6 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
                         holdings_list.activate(idx)
                         selected_holding_symbol = sym
                         refresh_events_list()
-                        refresh_symbols_label()
                 except Exception:
                     pass
         except Exception:
@@ -676,7 +675,6 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             holdings_list.activate(idx)
             selected_holding_symbol = current_symbol
         refresh_events_list()
-        auto_size_columns()
 
     # Inline cell editing state
     edit_widget: Optional[tk.Widget] = None
@@ -742,9 +740,9 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
                 v = (value or "").strip()
                 new_entry_values["note"] = "" if v == placeholder_note else v
 
-            # Update display for the new row
+            # Update display for the new row (default symbol to the currently selected holding if empty)
             events_tree.item("new", values=(
-                new_entry_values["symbol"] or placeholder_symbol,
+                new_entry_values["symbol"] or (selected_holding_symbol or placeholder_symbol),
                 new_entry_values["date"] or placeholder_date,
                 new_entry_values["type"] or placeholder_type,
                 new_entry_values["shares"] or placeholder_shares,
@@ -753,9 +751,9 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
                 new_entry_values["note"] or placeholder_note,
             ))
 
-            has_symbol = bool(new_entry_values["symbol"])
             has_other = bool(new_entry_values["date"] or new_entry_values["shares"] or new_entry_values["price"] or new_entry_values["amount"] or new_entry_values["note"] or (new_entry_values["type"] and new_entry_values["type"] != placeholder_type))
-            if has_symbol and has_other:
+            # Allow commit when either a symbol is typed OR a holding is currently selected
+            if has_other and (new_entry_values["symbol"] or get_selected_holding() is not None):
                 # Commit event to the entered or existing holding
                 target = portfolio.ensure_holding(new_entry_values["symbol"]) if new_entry_values["symbol"] else get_selected_holding()
                 if target is None:
@@ -1090,7 +1088,7 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
 
         # Always include a new event row for quick entry with placeholders or draft values
         events_tree.insert("", "end", iid="new", values=(
-            new_entry_values["symbol"] or placeholder_symbol,
+            new_entry_values["symbol"] or (selected_holding_symbol or placeholder_symbol),
             new_entry_values["date"] or placeholder_date,
             new_entry_values["type"] or placeholder_type,
             new_entry_values["shares"] or placeholder_shares,
@@ -1213,8 +1211,6 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             # Reload portfolio from disk
             current_symbol = selected_holding_symbol
             portfolio = storage.load_portfolio(portfolio_path)
-            portfolio_name_var.set(portfolio.name)
-            reinvest_var.set(portfolio.dividend_reinvest)
             # Keep selection
             refresh_holdings_list()
             if current_symbol:
