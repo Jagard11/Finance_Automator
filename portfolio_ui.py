@@ -156,6 +156,12 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     right_frame = ttk.Frame(main_pane)
     main_pane.add(right_frame, weight=3)
 
+    # Prevent the left pane (symbol shelf) from collapsing fully
+    try:
+        main_pane.paneconfigure(left_frame, minsize=120)
+    except Exception:
+        pass
+
     # Header area above events split into left/right columns
     header = ttk.Frame(right_frame)
     header.pack(fill="x", pady=(0, 8))
@@ -410,6 +416,13 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     events_tree.column("day_gain", width=110, anchor="e")
     events_tree.column("day_gain_pct", width=90, anchor="e")
 
+    # Excel-like resizing: prevent auto-stretching other columns and enforce a tiny min width
+    try:
+        for col_id in columns:
+            events_tree.column(col_id, stretch=False, minwidth=2)
+    except Exception:
+        pass
+
     # Placeholders for new row prompts and draft buffer for new entry
     placeholder_symbol = "Enter symbol"
     placeholder_date = "YYYY-MM-DD"
@@ -470,8 +483,11 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             # Sash position
             try:
                 sash = int(tab.get("sash0", 0))
-                if sash > 0:
-                    parent.after(0, lambda: main_pane.sashpos(0, sash))
+                # Clamp to the pane minimum so it never restores as fully closed
+                min_left = 120
+                if sash <= 0:
+                    sash = min_left
+                parent.after(0, lambda s=sash: main_pane.sashpos(0, max(min_left, s)))
             except Exception:
                 pass
             # Column widths
@@ -482,7 +498,8 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
                         try:
                             w = int(saved_cols.get(col_id, 0))
                             if w > 0:
-                                events_tree.column(col_id, width=w)
+                                # Clamp to prevent hidden columns
+                                events_tree.column(col_id, width=max(2, w))
                         except Exception:
                             continue
             except Exception:
@@ -540,8 +557,10 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             tab = dict(s.get("portfolio", {}))
             try:
                 pos = int(main_pane.sashpos(0))
-                if pos > 0:
-                    tab["sash0"] = pos
+                # Enforce the same minimum used for the pane so we don't persist a collapsed state
+                if pos < 120:
+                    pos = 120
+                tab["sash0"] = pos
             except Exception:
                 pass
             col_widths = {}
@@ -1205,8 +1224,38 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
 
     events_tree.bind("<Double-1>", on_tree_double_click)
     events_tree.bind("<Delete>", on_delete_key)
+    # Persist column widths after a resize gesture completes
+    def _on_column_resize_end(_evt=None):  # noqa: ANN001
+        # Clamp widths and persist after user finishes dragging any separator
+        try:
+            for col_id in columns:
+                try:
+                    w = int(events_tree.column(col_id, "width"))
+                except Exception:
+                    w = 0
+                if w < 2:
+                    try:
+                        events_tree.column(col_id, width=2)
+                    except Exception:
+                        pass
+            save_state()
+        except Exception:
+            pass
+    events_tree.bind("<ButtonRelease-1>", _on_column_resize_end)
     holdings_list.bind("<<ListboxSelect>>", on_select_holding)
     holdings_list.bind("<Double-1>", on_holdings_double_click)
+
+    # Re-apply layout when this tab/frame becomes visible again
+    try:
+        parent.bind("<Map>", lambda _e: apply_saved_layout())
+    except Exception:
+        pass
+
+    # Save sash position after user drags the divider
+    try:
+        main_pane.bind("<ButtonRelease-1>", lambda _e: save_state())
+    except Exception:
+        pass
 
     # Save controls
     bottom = ttk.Frame(parent)
@@ -1220,3 +1269,22 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     apply_saved_layout()
     # Start polling for external changes (e.g., background dividend ingestion)
     parent.after(2000, poll_for_changes)
+
+    # Expose hook so tab-change handler can re-apply layout when returning to this tab
+    try:
+        setattr(parent, "_portfolio_apply_saved_layout", apply_saved_layout)
+    except Exception:
+        pass
+
+
+def register_portfolio_tab_handlers(notebook: ttk.Notebook, portfolio_frame: tk.Widget) -> None:
+    def on_tab_changed(_evt=None):  # noqa: ANN001
+        try:
+            current = notebook.select()
+            if current == str(portfolio_frame):
+                fn = getattr(portfolio_frame, "_portfolio_apply_saved_layout", None)
+                if callable(fn):
+                    fn()
+        except Exception:
+            pass
+    notebook.bind("<<NotebookTabChanged>>", on_tab_changed)

@@ -5,7 +5,7 @@ import sys
 from contextlib import contextmanager
 from time import perf_counter
 
-from portfolio_ui import build_portfolio_ui
+from portfolio_ui import build_portfolio_ui, register_portfolio_tab_handlers
 from charts_ui import build_charts_ui, register_charts_tab_handlers
 from summary_ui import build_summary_ui, register_summary_tab_handlers
 from journal_ui import build_journal_ui, register_journal_tab_handlers
@@ -143,6 +143,7 @@ def main() -> None:
     build_journal_ui(journal_frame)
 
     register_summary_tab_handlers(notebook, summary_frame)
+    register_portfolio_tab_handlers(notebook, portfolio_frame)
     register_charts_tab_handlers(notebook, charts_frame)
     # Inject a helper so the journal tab can set a suffix while building
     def set_journal_tab_suffix(suffix: str) -> None:
