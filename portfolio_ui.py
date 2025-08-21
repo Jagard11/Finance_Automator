@@ -134,8 +134,7 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
 
     # Removed file switcher and local Switch button; use global selector in app header
 
-    reinvest_var = tk.BooleanVar(value=portfolio.dividend_reinvest)
-    ttk.Checkbutton(top_frame, text="Dividend Reinvest", variable=reinvest_var).pack(side="left")
+    # Per-symbol Dividend Reinvest toggle is shown in the header for the selected symbol (right column)
 
     # Removed local refresh dividends button to reduce redundancy
 
@@ -158,15 +157,19 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     right_frame = ttk.Frame(main_pane)
     main_pane.add(right_frame, weight=3)
 
-    # Header area above events: company name, price, change, status, and link
+    # Header area above events split into left/right columns
     header = ttk.Frame(right_frame)
     header.pack(fill="x", pady=(0, 8))
+    left_header = ttk.Frame(header)
+    left_header.pack(side="left", fill="x", expand=True)
+    right_header = ttk.Frame(header)
+    right_header.pack(side="right", anchor="e")
 
     company_var = tk.StringVar(value="")
-    company_label = ttk.Label(header, textvariable=company_var)
+    company_label = ttk.Label(left_header, textvariable=company_var)
     company_label.pack(anchor="w")
 
-    price_row = ttk.Frame(header)
+    price_row = ttk.Frame(left_header)
     price_row.pack(anchor="w")
 
     price_var = tk.StringVar(value="")
@@ -194,10 +197,10 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     change_label.pack(side="left", padx=(8, 0))
 
     status_var = tk.StringVar(value="")
-    status_label = ttk.Label(header, textvariable=status_var)
+    status_label = ttk.Label(left_header, textvariable=status_var)
     status_label.pack(anchor="w")
 
-    link_label = ttk.Label(header, text="View on Yahoo Finance", foreground="#0a84ff", cursor="hand2")
+    link_label = ttk.Label(left_header, text="View on Yahoo Finance", foreground="#0a84ff", cursor="hand2")
     link_label.pack(anchor="w")
 
     def _open_symbol_link(sym: str) -> None:
@@ -241,6 +244,52 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
         _company_name_cache[s] = name
         return name
 
+    # Per-symbol Dividend Reinvest preference stored in settings by portfolio file
+    reinvest_symbol_var = tk.BooleanVar(value=True)
+
+    def _get_reinvest_pref_for_symbol(sym: str) -> bool:
+        try:
+            s = settings.load_settings()
+            tab = s.get("portfolio", {})
+            by_file = tab.get("reinvest_by_file", {})
+            path = storage.default_portfolio_path()
+            prefs = by_file.get(path) or by_file.get(os.path.basename(path)) or {}
+            val = prefs.get(sym.upper()) if isinstance(prefs, dict) else None
+            return True if val is None else bool(val)
+        except Exception:
+            return True
+
+    def _set_reinvest_pref_for_symbol(sym: str, enabled: bool) -> None:
+        try:
+            s = settings.load_settings()
+            tab = dict(s.get("portfolio", {}))
+            by_file = dict(tab.get("reinvest_by_file", {}))
+            path = storage.default_portfolio_path()
+            prefs = dict(by_file.get(path) or by_file.get(os.path.basename(path)) or {})
+            prefs[sym.upper()] = bool(enabled)
+            by_file[path] = prefs
+            by_file[os.path.basename(path)] = prefs
+            tab["reinvest_by_file"] = by_file
+            s["portfolio"] = tab
+            settings.save_settings(s)
+        except Exception:
+            pass
+
+    def on_toggle_reinvest_symbol() -> None:
+        sym = selected_holding_symbol
+        if not sym:
+            return
+        _set_reinvest_pref_for_symbol(sym, bool(reinvest_symbol_var.get()))
+        # Ask background worker to re-ingest dividends so changes take effect
+        try:
+            q = get_task_queue()
+            if q is not None:
+                q.put_nowait({"type": "ingest_dividends", "path": storage.default_portfolio_path()})
+        except Exception:
+            pass
+
+    ttk.Checkbutton(right_header, text="Dividend Reinvest", variable=reinvest_symbol_var, command=on_toggle_reinvest_symbol).pack(anchor="e")
+
     def update_header_for_symbol(sym: Optional[str], last: Optional[float] = None, prev: Optional[float] = None) -> None:
         s = (sym or "").upper()
         if not s:
@@ -248,9 +297,18 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             price_var.set("")
             change_var.set("")
             status_var.set("")
+            try:
+                reinvest_symbol_var.set(True)
+            except Exception:
+                pass
             return
         company_name = _get_company_name(s)
         company_var.set(f"{company_name} ({s})")
+        # Update per-symbol reinvest toggle from settings (default True)
+        try:
+            reinvest_symbol_var.set(_get_reinvest_pref_for_symbol(s))
+        except Exception:
+            pass
         # If prices not provided, read from cache helpers
         if last is None or prev is None:
             lp, pp = _get_last_and_prev_price(s)
