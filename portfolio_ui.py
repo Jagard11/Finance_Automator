@@ -28,9 +28,7 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     top_frame = ttk.Frame(parent)
     top_frame.pack(fill="x", padx=8, pady=8)
 
-    ttk.Label(top_frame, text="Portfolio:").pack(side="left")
-    portfolio_name_var = tk.StringVar(value=portfolio.name)
-    ttk.Entry(top_frame, textvariable=portfolio_name_var, width=30).pack(side="left", padx=(4, 8))
+    # Removed Portfolio name field from top; editing lives in the Edit Portfolio dialog
 
     def on_edit_portfolio() -> None:
         win = tk.Toplevel(parent)
@@ -130,7 +128,8 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
         ttk.Button(btns, text="Save Name", command=do_rename).pack(side="left")
         tk.Button(btns, text="DELETE", command=do_delete, fg="#ffffff", bg="#e74c3c", activebackground="#c0392b").pack(side="right")
 
-    ttk.Button(top_frame, text="Edit Portfolio", command=on_edit_portfolio).pack(side="left", padx=(0, 8))
+    # Edit Portfolio button will be placed at bottom-right per spec; keep a reference
+    edit_portfolio_command = on_edit_portfolio
 
     # Removed file switcher and local Switch button; use global selector in app header
 
@@ -658,7 +657,6 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
             holdings_list.activate(idx)
             selected_holding_symbol = current_symbol
         refresh_events_list()
-        refresh_symbols_label()
         auto_size_columns()
 
     # Inline cell editing state
@@ -1213,26 +1211,7 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     # Save controls
     bottom = ttk.Frame(parent)
     bottom.pack(fill="x", padx=8, pady=8)
-
-    symbols_label_var = tk.StringVar(value="")
-    ttk.Label(bottom, textvariable=symbols_label_var).pack(side="left")
-
-    def refresh_symbols_label() -> None:
-        symbols_label_var.set(f"Symbols: {', '.join(sorted([h.symbol for h in portfolio.holdings]))}")
-
-    def on_save() -> None:
-        portfolio.name = portfolio_name_var.get().strip() or portfolio.name
-        portfolio.dividend_reinvest = reinvest_var.get()
-        storage.save_portfolio(portfolio)
-        messagebox.showinfo("Saved", f"Saved to {storage.default_portfolio_path()}")
-        try:
-            q = get_task_queue()
-            if q is not None:
-                q.put_nowait({"type": "warm_values"})
-        except Exception:
-            pass
-
-    ttk.Button(bottom, text="Save Portfolio", command=on_save).pack(side="right")
+    ttk.Button(bottom, text="Edit Portfolio", command=edit_portfolio_command).pack(side="right")
 
     # Initial population and selection
     refresh_holdings_list()
