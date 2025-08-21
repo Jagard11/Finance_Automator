@@ -10,6 +10,8 @@ from charts_ui import build_charts_ui, register_charts_tab_handlers
 from summary_ui import build_summary_ui, register_summary_tab_handlers
 from journal_ui import build_journal_ui, register_journal_tab_handlers
 from theme import apply_dark_theme
+import storage
+import os
 import settings
 from startup_tasks import run_startup_tasks_in_background, get_progress_queue
 from settings import VERBOSE
@@ -64,6 +66,41 @@ def main() -> None:
 
     # Kick off startup tasks (prefetch) without blocking UI
     run_startup_tasks_in_background()
+
+    # Header with global portfolio selector
+    header = ttk.Frame(root)
+    header.pack(fill="x")
+    ttk.Label(header, text="Current Portfolio:").pack(side="left", padx=(8, 4), pady=6)
+    try:
+        portfolio_paths = storage.list_portfolio_paths()
+        active_path = storage.default_portfolio_path()
+        display_names = [os.path.basename(p) for p in portfolio_paths]
+        name_to_path = {os.path.basename(p): p for p in portfolio_paths}
+        active_name = os.path.basename(active_path)
+    except Exception:
+        portfolio_paths = []
+        display_names = []
+        name_to_path = {}
+        active_name = ""
+    current_portfolio_var = tk.StringVar(value=active_name)
+    portfolio_combo = ttk.Combobox(header, textvariable=current_portfolio_var, state="readonly", width=40, values=display_names)
+    portfolio_combo.pack(side="left", padx=(0, 8))
+
+    def _set_active_portfolio_by_name(name: str) -> None:
+        path = name_to_path.get(name)
+        if not path:
+            return
+        try:
+            storage.set_default_portfolio_path(path)
+        except Exception:
+            pass
+        # Notify tabs to reload
+        try:
+            root.event_generate("<<PortfolioChanged>>", when="tail")
+        except Exception:
+            pass
+
+    portfolio_combo.bind("<<ComboboxSelected>>", lambda _e: _set_active_portfolio_by_name(current_portfolio_var.get()))
 
     notebook = ttk.Notebook(root)
     notebook.pack(fill="both", expand=True)

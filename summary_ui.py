@@ -65,14 +65,7 @@ def build_summary_ui(parent: tk.Widget) -> None:
     last_price_cache: Dict[str, Optional[float]] = {}
     day_prices_cache: Dict[str, Tuple[Optional[float], Optional[float]]] = {}
 
-    # Top metrics
-    top = ttk.Frame(parent)
-    top.pack(fill="x", padx=8, pady=8)
-
-    ttk.Button(top, text="Refresh", command=lambda: reload_and_refresh()).pack(side="right")
-    # Show active portfolio file
-    active_file_var = tk.StringVar(value=os.path.basename(portfolio_path))
-    ttk.Label(top, textvariable=active_file_var).pack(side="right", padx=(0, 12))
+    # Top metrics (global portfolio selector is now in the app header)
 
     metrics = ttk.Frame(parent)
     metrics.pack(fill="x", padx=8, pady=(0, 8))
@@ -560,10 +553,7 @@ def build_summary_ui(parent: tk.Widget) -> None:
         last_price_cache = {}
         day_prices_cache = {}
         recompute_and_fill()
-        try:
-            active_file_var.set(os.path.basename(portfolio_path))
-        except Exception:
-            pass
+        # Active file label removed; global selector handles display
 
     # Initial load
     reload_and_refresh()
