@@ -32,6 +32,106 @@ def build_portfolio_ui(parent: tk.Widget) -> None:
     portfolio_name_var = tk.StringVar(value=portfolio.name)
     ttk.Entry(top_frame, textvariable=portfolio_name_var, width=30).pack(side="left", padx=(4, 8))
 
+    def on_edit_portfolio() -> None:
+        win = tk.Toplevel(parent)
+        try:
+            win.title("Edit Portfolio")
+        except Exception:
+            pass
+        win.transient(parent)
+        win.grab_set()
+
+        body = ttk.Frame(win)
+        body.pack(fill="both", expand=True, padx=12, pady=12)
+
+        # Current file name and rename entry
+        current_path = storage.default_portfolio_path()
+        data_dir = storage.default_data_dir()
+        ttk.Label(body, text="File name (CSV):").grid(row=0, column=0, sticky="w")
+        name_var = tk.StringVar(value=os.path.basename(current_path))
+        name_entry = ttk.Entry(body, textvariable=name_var, width=40)
+        name_entry.grid(row=0, column=1, sticky="w", padx=(6, 0))
+
+        # Buttons row
+        btns = ttk.Frame(body)
+        btns.grid(row=1, column=0, columnspan=2, sticky="we", pady=(12, 0))
+
+        def do_rename() -> None:
+            new_name = (name_var.get() or "").strip()
+            if not new_name:
+                messagebox.showerror("Invalid name", "Please enter a file name.")
+                return
+            if os.sep in new_name or (os.altsep and os.altsep in new_name):
+                messagebox.showerror("Invalid name", "Please enter a file name without directory separators.")
+                return
+            if not new_name.lower().endswith(".csv"):
+                new_name += ".csv"
+            new_path = os.path.join(data_dir, new_name)
+            old_path = storage.default_portfolio_path()
+            if os.path.abspath(new_path) == os.path.abspath(old_path):
+                win.destroy()
+                return
+            if os.path.exists(new_path):
+                messagebox.showerror("Exists", f"{new_name} already exists.")
+                return
+            try:
+                os.rename(old_path, new_path)
+            except Exception as exc:
+                messagebox.showerror("Rename failed", str(exc))
+                return
+            try:
+                storage.set_default_portfolio_path(new_path)
+            except Exception:
+                pass
+            # Notify app and tabs
+            try:
+                parent.event_generate("<<PortfoliosListChanged>>", when="tail")
+            except Exception:
+                pass
+            try:
+                parent.event_generate("<<PortfolioChanged>>", when="tail")
+            except Exception:
+                pass
+            win.destroy()
+
+        def do_delete() -> None:
+            old_path = storage.default_portfolio_path()
+            fname = os.path.basename(old_path)
+            if not messagebox.askyesno("Delete Portfolio", f"Are you sure you want to delete {fname}? This cannot be undone."):
+                return
+            try:
+                os.remove(old_path)
+            except Exception as exc:
+                messagebox.showerror("Delete failed", str(exc))
+                return
+            # Choose next active portfolio if any
+            new_default = None
+            try:
+                paths = [p for p in storage.list_portfolio_paths() if os.path.exists(p)]
+                if paths:
+                    new_default = paths[0]
+            except Exception:
+                new_default = None
+            try:
+                if new_default:
+                    storage.set_default_portfolio_path(new_default)
+            except Exception:
+                pass
+            try:
+                parent.event_generate("<<PortfoliosListChanged>>", when="tail")
+            except Exception:
+                pass
+            try:
+                parent.event_generate("<<PortfolioChanged>>", when="tail")
+            except Exception:
+                pass
+            win.destroy()
+
+        ttk.Button(btns, text="Save Name", command=do_rename).pack(side="left")
+        tk.Button(btns, text="DELETE", command=do_delete, fg="#ffffff", bg="#e74c3c", activebackground="#c0392b").pack(side="right")
+
+    ttk.Button(top_frame, text="Edit Portfolio", command=on_edit_portfolio).pack(side="left", padx=(0, 8))
+
     # Removed file switcher and local Switch button; use global selector in app header
 
     reinvest_var = tk.BooleanVar(value=portfolio.dividend_reinvest)

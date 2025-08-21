@@ -71,17 +71,20 @@ def main() -> None:
     header = ttk.Frame(root)
     header.pack(fill="x")
     ttk.Label(header, text="Current Portfolio:").pack(side="left", padx=(8, 4), pady=6)
-    try:
-        portfolio_paths = storage.list_portfolio_paths()
-        active_path = storage.default_portfolio_path()
-        display_names = [os.path.basename(p) for p in portfolio_paths]
-        name_to_path = {os.path.basename(p): p for p in portfolio_paths}
-        active_name = os.path.basename(active_path)
-    except Exception:
-        portfolio_paths = []
-        display_names = []
-        name_to_path = {}
-        active_name = ""
+    def _load_portfolio_dropdown() -> tuple[list[str], dict[str, str], str]:
+        try:
+            portfolio_paths = storage.list_portfolio_paths()
+            active_path = storage.default_portfolio_path()
+            display_names = [os.path.basename(p) for p in portfolio_paths]
+            name_to_path = {os.path.basename(p): p for p in portfolio_paths}
+            active_name = os.path.basename(active_path) if active_path else (display_names[0] if display_names else "")
+        except Exception:
+            display_names = []
+            name_to_path = {}
+            active_name = ""
+        return display_names, name_to_path, active_name
+
+    display_names, name_to_path, active_name = _load_portfolio_dropdown()
     current_portfolio_var = tk.StringVar(value=active_name)
     portfolio_combo = ttk.Combobox(header, textvariable=current_portfolio_var, state="readonly", width=40, values=display_names)
     portfolio_combo.pack(side="left", padx=(0, 8))
@@ -101,6 +104,25 @@ def main() -> None:
             pass
 
     portfolio_combo.bind("<<ComboboxSelected>>", lambda _e: _set_active_portfolio_by_name(current_portfolio_var.get()))
+
+    # Keep dropdown in sync if files are renamed/deleted or portfolio changes elsewhere
+    def _refresh_dropdown() -> None:
+        names, mapping, active = _load_portfolio_dropdown()
+        try:
+            portfolio_combo.configure(values=names)
+        except Exception:
+            pass
+        nonlocal name_to_path
+        name_to_path = mapping
+        try:
+            current_portfolio_var.set(active)
+        except Exception:
+            pass
+    try:
+        root.bind_all("<<PortfoliosListChanged>>", lambda _e: _refresh_dropdown())
+        root.bind_all("<<PortfolioChanged>>", lambda _e: _refresh_dropdown())
+    except Exception:
+        pass
 
     notebook = ttk.Notebook(root)
     notebook.pack(fill="both", expand=True)
